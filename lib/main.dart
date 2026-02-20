@@ -26,6 +26,7 @@ class MyHomePage extends StatelessWidget {
   final String title;
 
 
+
   @override
   Widget build(BuildContext context) {
     final List<_MenuOption> options = [
@@ -49,11 +50,22 @@ class MyHomePage extends StatelessWidget {
       ),
       body: Padding(
         padding: const EdgeInsets.all(30.0),
-        child: GridView.count(
-          crossAxisCount: 2,
-          crossAxisSpacing: 20,
-          mainAxisSpacing: 20,
-          children: options.map((opt) => _MenuCard(option: opt)).toList(),
+        child: Column(
+          children: [
+            const Text(
+              'Welcome User!',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: GridView.count(
+                crossAxisCount: 2,
+                crossAxisSpacing: 20,
+                mainAxisSpacing: 20,
+                children: options.map((opt) => _MenuCard(option: opt)).toList(),
+              ),
+            ),
+          ],
         ),
       ),
     );
