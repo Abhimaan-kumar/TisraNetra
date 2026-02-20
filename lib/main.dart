@@ -12,7 +12,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Life Lens',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF03FB5E)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 3, 251, 40)),
         useMaterial3: true,
       ),
       home: const MyHomePage(title: 'Life Lens'),
@@ -25,27 +25,34 @@ class MyHomePage extends StatelessWidget {
 
   final String title;
 
+
   @override
   Widget build(BuildContext context) {
     final List<_MenuOption> options = [
-      _MenuOption('Read Anything', Icons.book, Colors.teal, const SimplePage(title: 'Read Anything')),
+      _MenuOption('Read Anything', Icons.book, const Color.fromARGB(255, 3, 153, 138), const SimplePage(title: 'Read Anything')),
       _MenuOption('Currency', Icons.attach_money, Colors.deepPurple, const SimplePage(title: 'Currency')),
       _MenuOption('Navigate', Icons.navigation, Colors.indigo, const SimplePage(title: 'Navigate')),
-      _MenuOption('Scene Captioning', Icons.camera_alt, Colors.orange, const SimplePage(title: 'Scene Captioning')),
-      _MenuOption('Color', Icons.color_lens, Colors.pink, const SimplePage(title: 'Color')),
+      _MenuOption('Object Recognition', Icons.search, Colors.green, const SimplePage(title: 'Object Recognition')),
+      _MenuOption('Scene Captioning', Icons.camera_alt, const Color.fromARGB(255, 1, 142, 85), const SimplePage(title: 'Scene Captioning')),
+      _MenuOption('Person Identification', Icons.tag_faces_outlined, const Color.fromARGB(255, 207, 176, 103), const SimplePage(title: 'Person Identification')),
+      _MenuOption('Color', Icons.color_lens, const Color.fromARGB(255, 30, 121, 233), const SimplePage(title: 'Color')),
+      _MenuOption('Talk with Voluntary', Icons.phone_in_talk_rounded, const Color.fromARGB(255, 142, 73, 37), const SimplePage(title: 'Talk with Voluntary')),
+      _MenuOption('Time pass with AI buddy', Icons.chat_outlined, const Color.fromARGB(255, 105, 118, 30), const SimplePage(title: 'Time pass with AI buddy')),
+      _MenuOption('Emergency', Icons.emoji_people_rounded, const Color.fromARGB(255, 255, 0, 0), const SimplePage(title: 'Emergency'))
+      
     ];
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.primary,
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(title),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(12.0),
+        padding: const EdgeInsets.all(30.0),
         child: GridView.count(
           crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
+          crossAxisSpacing: 20,
+          mainAxisSpacing: 20,
           children: options.map((opt) => _MenuCard(option: opt)).toList(),
         ),
       ),
@@ -71,9 +78,9 @@ class _MenuCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: option.color,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(20),
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(20),
         onTap: () {
           Navigator.of(context).push(MaterialPageRoute(builder: (_) => option.page));
         },
