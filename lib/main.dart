@@ -13,6 +13,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(
+<<<<<<< HEAD
         // This is the theme of your application.
         //
         // TRY THIS: Try running your application with "flutter run". You'll see
@@ -29,6 +30,10 @@ class MyApp extends StatelessWidget {
         // This works for code too, not just values: Most code changes can be
         // tested with just a hot reload.
         colorScheme: .fromSeed(seedColor: const Color.fromARGB(255, 212, 235, 2)),
+=======
+       
+        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+>>>>>>> 2f16c20f276c97ee7cb303b4e73a5c0a00e00746
       ),
       home: const MyHomePage(title: 'Flutter Demo Home Page'),
     );
