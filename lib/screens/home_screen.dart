@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:firebase_auth/firebase_auth.dart';
 import '../widgets/menu_option.dart';
 import '../widgets/menu_card.dart';
 import 'read_anything_screen.dart';
@@ -200,11 +201,36 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-              ).then((_) => _speak('Back to home. Press volume up to give a command.'));
+            onPressed: () async {
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                ).then((_) => _speak('Back to home. Press volume up to give a command.'));
+                return;
+              }
+              // If logged in, show simple account dialog with sign out
+              showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('Account'),
+                  content: Text('Signed in as ${user.email}'),
+                  actions: [
+                    TextButton(
+                      onPressed: () async {
+                        await FirebaseAuth.instance.signOut();
+                        if (mounted) Navigator.of(context).pop();
+                      },
+                      child: const Text('Sign out'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
             },
           ),
         ],

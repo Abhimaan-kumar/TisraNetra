@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
-import 'volunteer.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'login.dart'; // added import
+import 'home_screen.dart'; // added
+import 'volunteer.dart'; // added
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -10,236 +14,208 @@ class RegistrationScreen extends StatefulWidget {
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _ageController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _emergencyPhoneController = TextEditingController();
-  final _emailController = TextEditingController();
 
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _ageController.dispose();
-    _phoneController.dispose();
-    _emergencyPhoneController.dispose();
-    _emailController.dispose();
-    super.dispose();
-  }
+  final TextEditingController nameController = TextEditingController();
+  final TextEditingController ageController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
+  final TextEditingController passwordController = TextEditingController();
+  final TextEditingController emergencyPhoneController = TextEditingController();
 
-  void _handleRegister() {
-    if (_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Registration successful!'),
-          duration: Duration(seconds: 2),
-        ),
+  String userType = 'Client';
+
+  bool isLoading = false;
+
+  Future<void> registerUser() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => isLoading = true);
+
+    try {
+      // 1️⃣ Create user in Firebase Auth
+      UserCredential userCredential =
+          await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: emailController.text.trim(),
+        password: passwordController.text.trim(),
       );
-      // You can add your registration logic here
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          Navigator.pop(context);
-        }
-      });
-    }
-  }
 
-  void _handleJoinVolunteer() {
-    if (_formKey.currentState!.validate()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Thank you for joining as a volunteer!'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      // You can add your volunteer logic here
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const VolunteerScreen()),
-          );
-        }
+      String uid = userCredential.user!.uid;
+
+      // 2️⃣ Save extra details in Firestore
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'name': nameController.text.trim(),
+        'age': int.parse(ageController.text.trim()),
+        'email': emailController.text.trim(),
+        'userType': userType,
+        'emergencyPhone': emergencyPhoneController.text.trim(),
+        'createdAt': Timestamp.now(),
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Account Created Successfully")),
+      );
+
+      // Navigate based on userType
+      if (userType == 'Client') {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const VolunteerScreen()),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: $e")),
+      );
     }
+
+    setState(() => isLoading = false);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Registration'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: const Text('Create Account'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            children: [
-              const SizedBox(height: 20),
-              const Text(
-                'Register with us',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 30),
-              // Name Field
-              TextFormField(
-                controller: _nameController,
-                decoration: InputDecoration(
-                  labelText: 'Name',
-                  hintText: 'Enter your full name',
-                  prefixIcon: const Icon(Icons.person),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              children: [
+
+                const SizedBox(height: 30),
+
+                // Name
+                TextFormField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: "Full Name",
+                    border: OutlineInputBorder(),
                   ),
+                  validator: (value) =>
+                      value!.isEmpty ? "Enter your name" : null,
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your name';
-                  }
-                  if (value.length < 2) {
-                    return 'Name must be at least 2 characters';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-              // Age Field
-              TextFormField(
-                controller: _ageController,
-                decoration: InputDecoration(
-                  labelText: 'Age',
-                  hintText: 'Enter your age',
-                  prefixIcon: const Icon(Icons.calendar_today),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+
+                const SizedBox(height: 15),
+
+                // Age
+                TextFormField(
+                  controller: ageController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: "Age",
+                    border: OutlineInputBorder(),
                   ),
+                  validator: (value) =>
+                      value!.isEmpty ? "Enter your age" : null,
                 ),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your age';
-                  }
-                  if (int.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                  if (int.parse(value) < 1 || int.parse(value) > 150) {
-                    return 'Please enter a valid age';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-              // Phone Number Field
-              TextFormField(
-                controller: _phoneController,
-                decoration: InputDecoration(
-                  labelText: 'Phone Number',
-                  hintText: 'Enter your phone number',
-                  prefixIcon: const Icon(Icons.phone),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+
+                const SizedBox(height: 15),
+
+                // Email
+                TextFormField(
+                  controller: emailController,
+                  decoration: const InputDecoration(
+                    labelText: "Email",
+                    border: OutlineInputBorder(),
                   ),
+                  validator: (value) =>
+                      value!.isEmpty ? "Enter your email" : null,
                 ),
-                keyboardType: TextInputType.phone,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your phone number';
-                  }
-                  if (value.length < 10) {
-                    return 'Please enter a valid phone number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-              // Emergency Phone Number Field
-              TextFormField(
-                controller: _emergencyPhoneController,
-                decoration: InputDecoration(
-                  labelText: 'Emergency Phone Number',
-                  hintText: 'Enter emergency contact number',
-                  prefixIcon: const Icon(Icons.emergency),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+
+                const SizedBox(height: 15),
+
+                // Password
+                TextFormField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: "Password",
+                    border: OutlineInputBorder(),
                   ),
+                  validator: (value) =>
+                      value!.length < 6 ? "Minimum 6 characters" : null,
                 ),
-                keyboardType: TextInputType.phone,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter emergency phone number';
-                  }
-                  if (value.length < 10) {
-                    return 'Please enter a valid phone number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-              // Email Field
-              TextFormField(
-                controller: _emailController,
-                decoration: InputDecoration(
-                  labelText: 'Email',
-                  hintText: 'Enter your email address',
-                  prefixIcon: const Icon(Icons.email),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+
+                const SizedBox(height: 15),
+
+                // User Type (Client / Volunteer)
+                DropdownButtonFormField<String>(
+                  value: userType,
+                  decoration: const InputDecoration(
+                    labelText: "User Type",
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'Client', child: Text('Client')),
+                    DropdownMenuItem(value: 'Volunteer', child: Text('Volunteer')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) setState(() => userType = val);
+                  },
+                  validator: (value) =>
+                      (value == null || value.isEmpty) ? "Select user type" : null,
+                ),
+
+                const SizedBox(height: 15),
+
+                // Emergency Phone
+                TextFormField(
+                  controller: emergencyPhoneController,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: "Emergency Phone Number",
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) =>
+                      value!.isEmpty ? "Enter emergency phone number" : null,
+                ),
+
+                const SizedBox(height: 25),
+
+                // Register Button
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: isLoading ? null : registerUser,
+                    child: isLoading
+                        ? const CircularProgressIndicator(
+                            color: Colors.white,
+                          )
+                        : const Text(
+                            "Create Account",
+                            style: TextStyle(fontSize: 16),
+                          ),
                   ),
                 ),
-                keyboardType: TextInputType.emailAddress,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter your email';
-                  }
-                  if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(value)) {
-                    return 'Please enter a valid email address';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 40),
-              // Buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _handleRegister,
-                      icon: const Icon(Icons.check),
-                      label: const Text('Register'),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        backgroundColor: Colors.green,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
+
+                const SizedBox(height: 12),
+
+                // Login Button (opens login screen)
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const LoginScreen()),
+                      );
+                    },
+                    child: const Text("Login"),
                   ),
-                  const SizedBox(width: 15),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _handleJoinVolunteer,
-                      icon: const Icon(Icons.volunteer_activism),
-                      label: const Text('Join as Volunteer'),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        backgroundColor: Colors.blue,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-            ],
+                ),
+
+              ],
+            ),
           ),
         ),
       ),
