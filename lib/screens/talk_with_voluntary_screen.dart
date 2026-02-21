@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'registration.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'profile_screen.dart';
+
 
 class TalkWithVoluntaryScreen extends StatelessWidget {
   const TalkWithVoluntaryScreen({super.key});
@@ -12,10 +15,19 @@ class TalkWithVoluntaryScreen extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
-            onPressed: () {
+            onPressed: () async {
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                );
+                return;
+              }
+              // If logged in, open Profile screen
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
               );
             },
           ),

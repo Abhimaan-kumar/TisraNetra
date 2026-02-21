@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'profile_screen.dart';
+import 'volunteer.dart';
 import '../widgets/menu_option.dart';
 import '../widgets/menu_card.dart';
 import 'read_anything_screen.dart';
@@ -55,6 +58,24 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _setupVolumeButtonListener();
     _welcome();
+    _redirectIfVolunteer();
+  }
+
+  Future<void> _redirectIfVolunteer() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final userType = doc.data()?['userType'] as String?;
+      if (userType != null && userType.toLowerCase() == 'volunteer') {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const VolunteerScreen()),
+          );
+        }
+      }
+    } catch (_) {}
   }
 
   void _setupVolumeButtonListener() {
@@ -210,27 +231,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 ).then((_) => _speak('Back to home. Press volume up to give a command.'));
                 return;
               }
-              // If logged in, show simple account dialog with sign out
-              showDialog(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Account'),
-                  content: Text('Signed in as ${user.email}'),
-                  actions: [
-                    TextButton(
-                      onPressed: () async {
-                        await FirebaseAuth.instance.signOut();
-                        if (mounted) Navigator.of(context).pop();
-                      },
-                      child: const Text('Sign out'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ],
-                ),
-              );
+              // If logged in, open Profile screen
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              ).then((_) => _speak('Back to home. Press volume up to give a command.'));
             },
           ),
         ],

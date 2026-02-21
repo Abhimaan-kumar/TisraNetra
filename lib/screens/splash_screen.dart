@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'volunteer.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -37,14 +40,36 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     Timer(const Duration(seconds: 3), _goToHome);
   }
 
-  void _goToHome() {
+  void _goToHome() async {
     if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const HomeScreen(title: 'Life Lens'),
-      ),
-    );
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+      );
+      return;
+    }
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final userType = doc.data()?['userType'] as String?;
+      if (userType != null && userType.toLowerCase() == 'volunteer') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const VolunteerScreen()),
+        );
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+        );
+      }
+    } catch (e) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+      );
+    }
   }
 
   @override
