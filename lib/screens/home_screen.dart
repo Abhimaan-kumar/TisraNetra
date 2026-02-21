@@ -126,7 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _speak(String text) async {
     try {
-      await _tts.setSpeechRate(0.5);
+      await _tts.setSpeechRate(1.0);
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
       await _tts.speak(text);
@@ -184,7 +184,19 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(widget.title),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(
+              'images/logo.png',
+              width: 80,
+              height: 80,
+              errorBuilder: (ctx, obj, stack) => const SizedBox.shrink(),
+            ),
+            const SizedBox(width: 8),
+            Text(widget.title),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
