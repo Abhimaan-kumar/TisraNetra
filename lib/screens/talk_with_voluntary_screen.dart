@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'registration.dart';
 
 class TalkWithVoluntaryScreen extends StatelessWidget {
   const TalkWithVoluntaryScreen({super.key});
@@ -6,7 +7,20 @@ class TalkWithVoluntaryScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Talk with Voluntary')),
+      appBar: AppBar(
+        title: const Text('Talk with Voluntary'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

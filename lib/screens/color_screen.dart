@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'registration.dart';
 
 class ColorScreen extends StatelessWidget {
   const ColorScreen({super.key});
@@ -6,7 +7,20 @@ class ColorScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Color')),
+      appBar: AppBar(
+        title: const Text('Color'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

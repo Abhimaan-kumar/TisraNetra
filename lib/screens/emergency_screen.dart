@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'registration.dart';
 
 class EmergencyScreen extends StatelessWidget {
   const EmergencyScreen({super.key});
@@ -9,6 +10,17 @@ class EmergencyScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Emergency'),
         backgroundColor: Colors.red,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+              );
+            },
+          ),
+        ],
       ),
       body: Center(
         child: Column(

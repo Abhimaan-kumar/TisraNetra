@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'registration.dart';
 
 class AIBuddyScreen extends StatelessWidget {
   const AIBuddyScreen({super.key});
@@ -6,7 +7,20 @@ class AIBuddyScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Time pass with AI buddy')),
+      appBar: AppBar(
+        title: const Text('Time pass with AI buddy'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

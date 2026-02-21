@@ -14,6 +14,7 @@ import 'color_screen.dart';
 import 'talk_with_voluntary_screen.dart';
 import 'ai_buddy_screen.dart';
 import 'emergency_screen.dart';
+import 'registration.dart';
 
 // Command mapping for screens
 final Map<String, (String label, Widget Function() builder)> commandScreenMap = {
@@ -184,6 +185,17 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(widget.title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+              ).then((_) => _speak('Back to home. Press volume up to give a command.'));
+            },
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(30.0),
