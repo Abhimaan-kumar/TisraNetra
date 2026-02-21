@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:record/record.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
-import 'dart:io';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'registration.dart';
 import 'profile_screen.dart';
 
@@ -16,103 +14,130 @@ class AIBuddyScreen extends StatefulWidget {
 }
 
 class _AIBuddyScreenState extends State<AIBuddyScreen> {
-  final FlutterTts _tts = FlutterTts();
-  final _audioRecorder = AudioRecorder();
-  
-  bool _isRecording = false;
-  bool _isProcessing = false;
-  String _transcript = '';
-  String _response = '';
-  List<Map<String, String>> _chatHistory = [];
-  String? _recordingPath;
+  late GenerativeModel _model;
+  late ChatSession _chatSession;
+  late FlutterTts _tts;
+  late stt.SpeechToText _speech;
 
-  // Replace with your Gemini API key from https://ai.google.dev/
-  static const String _geminiApiKey = 'YOUR_GEMINI_API_KEY_HERE';
+  final List<Message> _messages = [];
+  final _textController = TextEditingController();
+  bool _loading = false;
+  bool _listening = false;
+  String _recognizedText = '';
+  bool _isSpeaking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeGemini();
+    _initializeTTS();
+    _initializeSpeechRecognition();
+  }
+
+  void _initializeGemini() {
+    const String apiKey = 'REDACTED_PRIVATE_API_KEY';
+    _model = GenerativeModel(
+      model: 'gemini-pro',
+      apiKey: apiKey,
+    );
+    _chatSession = _model.startChat();
+  }
+
+  void _initializeTTS() {
+    _tts = FlutterTts();
+    _tts.setLanguage("en-US");
+    _tts.setSpeechRate(1.0);
+  }
+
+  void _initializeSpeechRecognition() async {
+    _speech = stt.SpeechToText();
+    await _speech.initialize();
+  }
+
+  void _startListening() async {
+    if (!_listening) {
+      _recognizedText = '';
+      if (await _speech.initialize()) {
+        setState(() => _listening = true);
+        _speech.listen(onResult: (result) {
+          setState(() {
+            _recognizedText = result.recognizedWords;
+          });
+          if (result.finalResult) {
+            _textController.text = result.recognizedWords;
+            setState(() => _listening = false);
+          }
+        });
+      }
+    } else {
+      _speech.stop();
+      setState(() => _listening = false);
+    }
+  }
+
+  void _speak(String text) async {
+    setState(() => _isSpeaking = true);
+    await _tts.speak(text);
+    setState(() => _isSpeaking = false);
+  }
+
+  Future<void> _sendMessage() async {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+
+    setState(() {
+      _loading = true;
+      _messages.add(Message(text: text, fromUser: true));
+      _textController.clear();
+      _recognizedText = '';
+    });
+
+    try {
+      final response = await _chatSession.sendMessage(Content.text(text));
+      final responseText = response.text ?? 'No response';
+      setState(() {
+        _messages.add(Message(text: responseText, fromUser: false));
+      });
+      _speak(responseText);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${e.toString()}')),
+      );
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
 
   @override
   void dispose() {
-    _audioRecorder.dispose();
+    _textController.dispose();
+    _speech.stop();
     _tts.stop();
     super.dispose();
-  }
-
-  Future<void> _startRecording() async {
-    try {
-      if (await _audioRecorder.hasPermission()) {
-        final dir = await getTemporaryDirectory();
-        _recordingPath = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-        
-        await _audioRecorder.start(
-          RecordConfig(encoder: AudioEncoder.aacLc, sampleRate: 16000),
-          path: _recordingPath!,
-        );
-        setState(() => _isRecording = true);
-      }
-    } catch (e) {
-      _showSnackBar('Recording failed: $e');
-    }
-  }
-
-  Future<void> _stopRecordingAndProcess() async {
-    try {
-      final path = await _audioRecorder.stop();
-      setState(() => _isRecording = false);
-      
-      if (path != null) {
-        setState(() => _isProcessing = true);
-        _showSnackBar('Processing audio...');
-        
-        // Prepare audio file and send to Gemini
-        final audioFile = File(path);
-        final audioBytes = await audioFile.readAsBytes();
-        
-        // Send to Gemini with audio
-        final model = GenerativeModel(model: 'gemini-1.5-flash', apiKey: _geminiApiKey);
-        final content = [
-          Content.multi([
-            TextPart('Listen to this audio and respond conversationally. Be friendly and helpful.'),
-            DataPart('audio/m4a', audioBytes),
-          ])
-        ];
-        
-        final response = await model.generateContent(content);
-        final text = response.text ?? 'No response';
-        
-        setState(() {
-          _response = text;
-          _chatHistory.add({'user': 'voice', 'ai': text});
-        });
-        
-        // Speak response
-        await _tts.speak(text);
-        _showSnackBar('Response ready');
-      }
-    } catch (e) {
-      _showSnackBar('Error: $e');
-    } finally {
-      setState(() => _isProcessing = false);
-    }
-  }
-
-  void _showSnackBar(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI Buddy Chat'),
+        title: const Text('Time pass with AI buddy'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
-            onPressed: () {
+            onPressed: () async {
               final user = FirebaseAuth.instance.currentUser;
               if (user == null) {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const RegistrationScreen()));
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                );
                 return;
               }
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              );
             },
           ),
         ],
@@ -120,68 +145,102 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
       body: Column(
         children: [
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                if (_response.isNotEmpty)
-                  Card(
-                    color: Colors.blue.shade50,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('AI Response:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                          const SizedBox(height: 8),
-                          Text(_response),
-                        ],
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 16),
-                if (_chatHistory.isEmpty)
-                  Center(
+            child: _messages.isEmpty
+                ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.chat_outlined, size: 64, color: Colors.grey),
+                        Icon(Icons.chat_outlined,
+                            size: 64, color: const Color.fromARGB(255, 105, 118, 30)),
                         const SizedBox(height: 16),
-                        const Text('Press the mic to start chatting with AI Buddy!', textAlign: TextAlign.center),
+                        const Text('Start a conversation',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   )
-                else
-                  ..._chatHistory.map((msg) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Align(
-                          alignment: msg['user'] == 'voice' ? Alignment.centerRight : Alignment.centerLeft,
-                          child: Card(
-                            color: msg['user'] == 'voice' ? Colors.green.shade100 : Colors.grey.shade200,
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Text(msg['ai'] ?? ''),
+                : ListView.builder(
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = _messages[index];
+                      return Align(
+                        alignment:
+                            msg.fromUser ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(12),
+                          constraints:
+                              BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+                          decoration: BoxDecoration(
+                            color: msg.fromUser
+                                ? const Color.fromARGB(255, 3, 251, 40)
+                                : Colors.grey[300],
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            msg.text,
+                            style: TextStyle(
+                              color: msg.fromUser ? Colors.black : Colors.black,
+                              fontSize: 14,
                             ),
                           ),
                         ),
-                      )),
-              ],
-            ),
+                      );
+                    },
+                  ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16),
+          Container(
+            padding: const EdgeInsets.all(12),
             child: Column(
               children: [
-                if (_isProcessing)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: CircularProgressIndicator(),
+                if (_recognizedText.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[100],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('Heard: $_recognizedText',
+                        style: const TextStyle(fontSize: 14, color: Colors.blue)),
                   ),
-                FloatingActionButton.extended(
-                  onPressed: _isRecording ? _stopRecordingAndProcess : (_isProcessing ? null : _startRecording),
-                  icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                  label: Text(_isRecording ? 'Stop' : _isProcessing ? 'Processing...' : 'Tap to talk'),
-                  backgroundColor: _isRecording ? Colors.red : Colors.green,
-                )
+                if (_recognizedText.isNotEmpty) const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _textController,
+                        decoration: InputDecoration(
+                          hintText: 'Type or speak...',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FloatingActionButton(
+                      mini: true,
+                      onPressed: _loading ? null : _startListening,
+                      backgroundColor: _listening ? Colors.red : Colors.blue,
+                      child: Icon(_listening ? Icons.mic : Icons.mic_none),
+                    ),
+                    const SizedBox(width: 8),
+                    FloatingActionButton(
+                      mini: true,
+                      onPressed: _loading ? null : _sendMessage,
+                      backgroundColor: const Color.fromARGB(255, 3, 251, 40),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation(Colors.black),
+                              ),
+                            )
+                          : const Icon(Icons.send, color: Colors.black),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -191,3 +250,9 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
   }
 }
 
+class Message {
+  final String text;
+  final bool fromUser;
+
+  Message({required this.text, required this.fromUser});
+}
