@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'registration.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'profile_screen.dart';
 
 class ColorScreen extends StatelessWidget {
   const ColorScreen({super.key});
@@ -6,7 +9,28 @@ class ColorScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Color')),
+      appBar: AppBar(
+        title: const Text('Color'),
+        actions: [
+            IconButton(
+              icon: const Icon(Icons.person),
+              onPressed: () async {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user == null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                  );
+                } else {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                  );
+                }
+              },
+            ),
+          ],
+        ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
