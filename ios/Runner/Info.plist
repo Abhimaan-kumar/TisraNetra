@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>This app needs microphone access to accept voice commands.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs camera access to recognize and read text from images.</string>
 </dict>
 </plist>
