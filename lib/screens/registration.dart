@@ -149,7 +149,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
                 // User Type (Client / Volunteer)
                 DropdownButtonFormField<String>(
-                  value: userType,
+                  initialValue: userType,
                   decoration: const InputDecoration(
                     labelText: "User Type",
                     border: OutlineInputBorder(),

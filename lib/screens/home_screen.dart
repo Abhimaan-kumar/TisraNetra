@@ -21,7 +21,8 @@ import 'emergency_screen.dart';
 import 'registration.dart';
 
 // Command mapping for screens
-final Map<String, (String label, Widget Function() builder)> commandScreenMap = {
+final Map<String, (String label, Widget Function() builder)>
+commandScreenMap = {
   'read': ('Read Anything', () => const ReadAnythingScreen()),
   'currency': ('Currency', () => const CurrencyScreen()),
   'navigate': ('Navigate', () => const NavigateScreen()),
@@ -29,7 +30,10 @@ final Map<String, (String label, Widget Function() builder)> commandScreenMap = 
   'scene': ('Scene Captioning', () => const SceneCaptioningScreen()),
   'caption': ('Scene Captioning', () => const SceneCaptioningScreen()),
   'person': ('Person Identification', () => const PersonIdentificationScreen()),
-  'identify': ('Person Identification', () => const PersonIdentificationScreen()),
+  'identify': (
+    'Person Identification',
+    () => const PersonIdentificationScreen(),
+  ),
   'color': ('Color', () => const ColorScreen()),
   'talk': ('Talk with Voluntary', () => const TalkWithVoluntaryScreen()),
   'voluntary': ('Talk with Voluntary', () => const TalkWithVoluntaryScreen()),
@@ -65,7 +69,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       final userType = doc.data()?['userType'] as String?;
       if (userType != null && userType.toLowerCase() == 'volunteer') {
         if (mounted) {
@@ -119,13 +126,15 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       if (available) {
         setState(() => _listening = true);
-        _speech.listen(onResult: (val) {
-          if (val.finalResult) {
-            setState(() {
-              _lastWords = val.recognizedWords;
-            });
-          }
-        });
+        _speech.listen(
+          onResult: (val) {
+            if (val.finalResult) {
+              setState(() {
+                _lastWords = val.recognizedWords;
+              });
+            }
+          },
+        );
 
         // Stop listening after 5 seconds
         Future.delayed(const Duration(seconds: 5), () {
@@ -174,10 +183,14 @@ class _HomeScreenState extends State<HomeScreen> {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => builder()),
-        ).then((_) => _speak('Back to home. Press volume up to give a command.'));
+        ).then(
+          (_) => _speak('Back to home. Press volume up to give a command.'),
+        );
       }
     } else {
-      await _speak('Sorry, I did not catch that. Press volume up again to give a command.');
+      await _speak(
+        'Sorry, I did not catch that. Press volume up again to give a command.',
+      );
     }
   }
 
@@ -191,16 +204,66 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final List<MenuOption> options = [
-      MenuOption('Read Anything', Icons.book, const Color.fromARGB(255, 3, 153, 138), const ReadAnythingScreen()),
-      MenuOption('Currency', Icons.attach_money, Colors.deepPurple, const CurrencyScreen()),
-      MenuOption('Navigate', Icons.navigation, Colors.indigo, const NavigateScreen()),
-      MenuOption('Object Recognition', Icons.search, Colors.green, const ObjectRecognitionScreen()),
-      MenuOption('Scene Captioning', Icons.camera_alt, const Color.fromARGB(255, 1, 142, 85), const SceneCaptioningScreen()),
-      MenuOption('Person Identification', Icons.tag_faces_outlined, const Color.fromARGB(255, 207, 176, 103), const PersonIdentificationScreen()),
-      MenuOption('Color', Icons.color_lens, const Color.fromARGB(255, 30, 121, 233), const ColorScreen()),
-      MenuOption('Talk with Voluntary', Icons.phone_in_talk_rounded, const Color.fromARGB(255, 142, 73, 37), const TalkWithVoluntaryScreen()),
-      MenuOption('Time pass with AI buddy', Icons.chat_outlined, const Color.fromARGB(255, 105, 118, 30), const AIBuddyScreen()),
-      MenuOption('Emergency', Icons.emoji_people_rounded, const Color.fromARGB(255, 255, 0, 0), const EmergencyScreen())
+      MenuOption(
+        'Read Anything',
+        Icons.book,
+        const Color.fromARGB(255, 3, 153, 138),
+        const ReadAnythingScreen(),
+      ),
+      MenuOption(
+        'Currency',
+        Icons.attach_money,
+        Colors.deepPurple,
+        const CurrencyScreen(),
+      ),
+      MenuOption(
+        'Navigate',
+        Icons.navigation,
+        Colors.indigo,
+        const NavigateScreen(),
+      ),
+      MenuOption(
+        'Object Recognition',
+        Icons.search,
+        Colors.green,
+        const ObjectRecognitionScreen(),
+      ),
+      MenuOption(
+        'Scene Captioning',
+        Icons.camera_alt,
+        const Color.fromARGB(255, 1, 142, 85),
+        const SceneCaptioningScreen(),
+      ),
+      MenuOption(
+        'Person Identification',
+        Icons.tag_faces_outlined,
+        const Color.fromARGB(255, 207, 176, 103),
+        const PersonIdentificationScreen(),
+      ),
+      MenuOption(
+        'Color',
+        Icons.color_lens,
+        const Color.fromARGB(255, 30, 121, 233),
+        const ColorScreen(),
+      ),
+      MenuOption(
+        'Talk with Voluntary',
+        Icons.phone_in_talk_rounded,
+        const Color.fromARGB(255, 142, 73, 37),
+        const TalkWithVoluntaryScreen(),
+      ),
+      MenuOption(
+        'Time pass with AI buddy',
+        Icons.chat_outlined,
+        const Color.fromARGB(255, 105, 118, 30),
+        const AIBuddyScreen(),
+      ),
+      MenuOption(
+        'Emergency',
+        Icons.emoji_people_rounded,
+        const Color.fromARGB(255, 255, 0, 0),
+        const EmergencyScreen(),
+      ),
     ];
 
     return Scaffold(
@@ -228,14 +291,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-                ).then((_) => _speak('Back to home. Press volume up to give a command.'));
+                ).then(
+                  (_) => _speak(
+                    'Back to home. Press volume up to give a command.',
+                  ),
+                );
                 return;
               }
               // If logged in, open Profile screen
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              ).then((_) => _speak('Back to home. Press volume up to give a command.'));
+              ).then(
+                (_) =>
+                    _speak('Back to home. Press volume up to give a command.'),
+              );
             },
           ),
         ],
