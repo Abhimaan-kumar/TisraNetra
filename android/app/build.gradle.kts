@@ -24,7 +24,7 @@ android {
 
     defaultConfig {
         applicationId = "com.lifelens.app"
-        minSdk = flutter.minSdkVersion  // Required for ML Kit
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
