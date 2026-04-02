@@ -1,14 +1,11 @@
-import 'package:flutter/material.dart';
-import 'registration.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'profile_screen.dart';
-import 'package:camera/camera.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 import 'dart:async';
+import 'dart:typed_data';
+import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import '../../services/currency_service.dart';
+import '../../services/tts_service.dart';
 
 class CurrencyScreen extends StatefulWidget {
   const CurrencyScreen({super.key});
@@ -19,845 +16,451 @@ class CurrencyScreen extends StatefulWidget {
 
 class _CurrencyScreenState extends State<CurrencyScreen>
     with WidgetsBindingObserver {
-  late CameraController _cameraController;
-  final TextRecognizer _textRecognizer = TextRecognizer();
-  late ObjectDetector _objectDetector;
-  FlutterTts flutterTts = FlutterTts();
+  CameraController? _cameraController;
+  final CurrencyService _currencyService = CurrencyService();
+  final TtsService _ttsService = TtsService();
   final SpeechToText _speechToText = SpeechToText();
-  bool isCameraInitialized = false;
-  bool isDetecting = false;
-  String detectedCurrency = 'Waiting for currency...';
-  int totalAmount = 0;
-  Map<String, int> denominationCount = {};
-  bool isSpeaking = false;
-  Timer? detectionTimer;
-  String? lastDetectedDenomination;
-  Map<String, DateTime> denominationLastCountedTime = {};
-  bool _isListeningForCommands = false;
-  DateTime? _lastVoiceCommandAt;
-  String? _pendingDenomination;
-  String? _pendingNoteKey;
-  int _pendingDetectionCount = 0;
-  Set<String> _detectedSerialNumbers = {}; // Track unique serial numbers
-  String? _lastSerialNumber;
 
-  // Indian rupee denominations
-  final Map<String, int> rupeeValues = {
-    '2000': 2000,
-    '500': 500,
-    '200': 200,
-    '100': 100,
-    '50': 50,
-    '20': 20,
-    '10': 10,
-    '5': 5,
-    '2': 2,
-    '1': 1,
-  };
+  List<CameraDescription> _cameras = [];
+  CurrencyDetectionResult? _lastResult;
 
-  // English denomination names for blind users
-  final Map<String, String> currencyNameEnglish = {
-    '2000': 'Two Thousand',
-    '500': 'Five Hundred',
-    '200': 'Two Hundred',
-    '100': 'One Hundred',
-    '50': 'Fifty',
-    '20': 'Twenty',
-    '10': 'Ten',
-    '5': 'Five',
-    '2': 'Two',
-    '1': 'One',
-  };
+  bool _isDetecting = false;
+  bool _isCameraReady = false;
+  bool _isScanning = false;
+  String _statusMessage = 'Tap the button to start scanning';
+
+  Timer? _scanTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initializeObjectDetector();
-    _initializeCamera();
-    _initializeTTS();
-    _initializeSpeechCommands();
-  }
-
-  void _initializeObjectDetector() {
-    final options = ObjectDetectorOptions(
-      mode: DetectionMode.single,
-      classifyObjects: true,
-      multipleObjects: false,
-    );
-    _objectDetector = ObjectDetector(options: options);
-  }
-
-  Future<void> _initializeTTS() async {
-    await flutterTts.setLanguage('en-US');
-    await flutterTts.setSpeechRate(0.45);
-    await flutterTts.setVolume(1.0);
-    await flutterTts.awaitSpeakCompletion(true);
-  }
-
-  Future<void> _initializeSpeechCommands() async {
-    final micStatus = await Permission.microphone.request();
-    if (!micStatus.isGranted) {
-      _showErrorSnackBar(
-        'Microphone permission is required for voice commands',
-      );
-      return;
-    }
-
-    final isAvailable = await _speechToText.initialize(
-      onStatus: (status) {
-        if (status == 'done' || status == 'notListening') {
-          _isListeningForCommands = false;
-          _startListeningForCommands();
-        }
-      },
-      onError: (error) {
-        _isListeningForCommands = false;
-      },
-    );
-
-    if (isAvailable) {
-      _startListeningForCommands();
-    }
-  }
-
-  Future<void> _startListeningForCommands() async {
-    if (!mounted || !_speechToText.isAvailable || _isListeningForCommands) {
-      return;
-    }
-
-    _isListeningForCommands = true;
-    await _speechToText.listen(
-      onResult: (result) {
-        final heardText = result.recognizedWords.trim().toLowerCase();
-        if (heardText.isNotEmpty) {
-          _handleVoiceCommand(heardText);
-        }
-      },
-      listenFor: const Duration(seconds: 20),
-      pauseFor: const Duration(seconds: 3),
-      partialResults: true,
-      localeId: 'en_IN',
-      cancelOnError: true,
-    );
-  }
-
-  void _handleVoiceCommand(String heardText) {
-    final isResetCommand =
-        heardText.contains('reset') ||
-        heardText.contains('wapas se') ||
-        heardText.contains('vaapas se') ||
-        heardText.contains('वापस से') ||
-        heardText.contains('रीसेट');
-
-    final isBackCommand =
-        heardText.contains('back') ||
-        heardText.contains('go back') ||
-        heardText.contains('main page') ||
-        heardText.contains('home') ||
-        heardText.contains('peeche') ||
-        heardText.contains('piche') ||
-        heardText.contains('पीछे') ||
-        heardText.contains('वापस');
-
-    if (!isResetCommand && !isBackCommand) {
-      return;
-    }
-
-    final now = DateTime.now();
-    if (_lastVoiceCommandAt != null &&
-        now.difference(_lastVoiceCommandAt!).inMilliseconds < 2000) {
-      return;
-    }
-
-    _lastVoiceCommandAt = now;
-    if (isBackCommand) {
-      _goBackToMain();
-      return;
-    }
-
-    _resetDetection();
-  }
-
-  Future<void> _goBackToMain() async {
-    if (_isListeningForCommands) {
-      await _speechToText.stop();
-      _isListeningForCommands = false;
-    }
-
-    if (!mounted) {
-      return;
-    }
-
-    Navigator.maybePop(context);
-  }
-
-  Future<void> _initializeCamera() async {
-    PermissionStatus cameraStatus = await Permission.camera.request();
-
-    if (cameraStatus.isGranted) {
-      try {
-        final cameras = await availableCameras();
-        if (cameras.isNotEmpty) {
-          _cameraController = CameraController(
-            cameras[0],
-            ResolutionPreset.high,
-            enableAudio: false,
-          );
-
-          await _cameraController.initialize();
-
-          _startDetectionTimer();
-
-          if (mounted) {
-            setState(() {
-              isCameraInitialized = true;
-              detectedCurrency = 'Scanning for currency...';
-            });
-          }
-        }
-      } catch (e) {
-        print('Error initializing camera: $e');
-        _showErrorSnackBar('Failed to initialize camera');
-      }
-    } else {
-      _showErrorSnackBar('Camera permission is required');
-    }
-  }
-
-  void _startDetectionTimer() {
-    detectionTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      if (isCameraInitialized && !isDetecting) {
-        await _performDetection();
+    _initSpeech();
+    _initCamera().then((_) {
+      if (_isCameraReady) {
+        _startScanning();
       }
     });
+    _ttsService.speak(
+      'Currency detection screen opened. Scanning will start automatically.',
+    );
   }
 
-  Future<void> _performDetection() async {
-    if (!isCameraInitialized) return;
+  Future<void> _initCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) {
+        setState(() => _statusMessage = 'No camera found');
+        return;
+      }
+      await _startCamera(_cameras.first);
+    } catch (e) {
+      setState(() => _statusMessage = 'Camera error: $e');
+    }
+  }
 
-    isDetecting = true;
+  Future<void> _initSpeech() async {
+    await _speechToText.initialize();
+  }
+
+  // ✅ FIX 7: Use HIGH resolution for better note recognition
+  Future<void> _startCamera(CameraDescription camera) async {
+    final controller = CameraController(
+      camera,
+      ResolutionPreset.high, // Changed from medium → high
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
 
     try {
-      final image = await _cameraController.takePicture();
-      final inputImage = InputImage.fromFilePath(image.path);
+      await controller.initialize();
+      // ✅ FIX 8: Set focus mode to auto for sharp images
+      await controller.setFocusMode(FocusMode.auto);
+      await controller.setExposureMode(ExposureMode.auto);
+      await controller.setFlashMode(FlashMode.off);
 
-      // Stage 1: Try object detection (helper only, do not block OCR)
-      try {
-        await _objectDetector.processImage(inputImage);
-      } catch (_) {
-        // Continue with OCR even if object detection fails for this frame
+      if (!mounted) return;
+      setState(() {
+        _cameraController = controller;
+        _isCameraReady = true;
+      });
+    } catch (e) {
+      setState(() => _statusMessage = 'Camera init failed: $e');
+    }
+  }
+
+  void _startScanning() {
+    if (_isScanning) {
+      _stopScanning();
+      return;
+    }
+
+    setState(() {
+      _isScanning = true;
+      _statusMessage = 'Scanning... Hold camera over currency notes';
+    });
+
+    _ttsService.speak(
+      'Scanning started. Hold the camera over the currency notes.',
+    );
+
+    // Auto-scan every 4 seconds
+    _scanTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (_isScanning && !_isDetecting) {
+        _captureAndDetect();
       }
+    });
 
-      // Stage 2: Run text recognition
-      final recognizedText = await _textRecognizer.processImage(inputImage);
+    // First scan immediately
+    _captureAndDetect();
+  }
 
-      // Only analyze if we got substantial text
-      if (recognizedText.text.trim().isEmpty) {
-        _pendingDenomination = null;
-        _pendingDetectionCount = 0;
-        if (mounted) {
-          setState(() {
-            detectedCurrency = 'No currency detected';
-          });
-        }
+  void _stopScanning() {
+    _scanTimer?.cancel();
+    setState(() {
+      _isScanning = false;
+      _statusMessage = 'Scanning stopped. Tap to scan again.';
+    });
+    _ttsService.speak('Scanning stopped.');
+  }
+
+  Future<void> _captureAndDetect() async {
+    if (_isDetecting || _cameraController == null || !_isCameraReady) return;
+
+    setState(() {
+      _isDetecting = true;
+      _statusMessage = 'Analyzing image...';
+    });
+
+    try {
+      // ✅ FIX 9: Re-trigger autofocus before capturing
+      await _cameraController!.setFocusMode(FocusMode.auto);
+      await Future.delayed(
+        const Duration(milliseconds: 600),
+      ); // Let focus settle
+
+      final XFile photo = await _cameraController!.takePicture();
+      final Uint8List imageBytes = await photo.readAsBytes();
+
+      print('Image size: ${imageBytes.length} bytes'); // Should be > 100KB
+
+      // ✅ FIX 10: Reject blurry/too-small images
+      if (imageBytes.length < 50000) {
+        setState(() => _statusMessage = 'Image too small, retrying...');
+        setState(() => _isDetecting = false);
         return;
       }
 
-      // Analyze text for currency denominations
-      _analyzeCurrencyFromText(recognizedText.text);
-    } catch (e) {
-      print('Error during detection: $e');
-    } finally {
-      isDetecting = false;
-    }
-  }
+      final result = await _currencyService.detectCurrency(imageBytes);
 
-  void _analyzeCurrencyFromText(String text) {
-    final detectedDenomination = _extractDetectedDenomination(text);
+      if (!mounted) return;
 
-    if (detectedDenomination == null) {
-      _pendingDenomination = null;
-      _pendingNoteKey = null;
-      _pendingDetectionCount = 0;
-      _lastSerialNumber = null;
-      if (mounted) {
+      if (result != null && result.detectedNotes.isNotEmpty) {
         setState(() {
-          detectedCurrency = 'No currency detected';
+          _lastResult = result;
+          _statusMessage = 'Detection complete!';
         });
-      }
-      return;
-    }
 
-    // Extract serial number to identify unique notes
-    final serialNumber = _extractSerialNumber(text);
-    final noteFingerprint = _buildNoteFingerprint(text, detectedDenomination);
-    final noteKey = serialNumber != null && serialNumber.isNotEmpty
-        ? '$detectedDenomination-$serialNumber'
-        : '$detectedDenomination-$noteFingerprint';
-
-    if (_pendingDenomination == detectedDenomination &&
-        _pendingNoteKey == noteKey) {
-      _pendingDetectionCount += 1;
-    } else {
-      _pendingDenomination = detectedDenomination;
-      _pendingNoteKey = noteKey;
-      _lastSerialNumber = serialNumber;
-      _pendingDetectionCount = 1;
-    }
-
-    // Require same denomination in at least 2 consecutive frames
-    if (_pendingDetectionCount < 2) {
-      return;
-    }
-
-    final value = rupeeValues[detectedDenomination];
-    if (value == null) {
-      return;
-    }
-
-    // Check if this is a new note by serial/fingerprint key
-    final noteIdentifier = noteKey;
-
-    if (_detectedSerialNumbers.contains(noteIdentifier)) {
-      // Already counted this exact note
-      return;
-    }
-
-    // Check if this denomination was shown recently (within 5 seconds)
-    // This allows re-scanning after brief removal
-    final now = DateTime.now();
-    final lastCountTime = denominationLastCountedTime[detectedDenomination];
-
-    final canCount =
-        lastCountTime == null || now.difference(lastCountTime).inSeconds >= 5;
-
-    // Count if it's a new stable note key OR enough time has passed for re-scan
-    if (canCount || !_detectedSerialNumbers.contains(noteIdentifier)) {
-      _detectedSerialNumbers.add(noteIdentifier);
-
-      _updateCurrencyDisplay(detectedDenomination, value);
-      _speakCurrencyDetected(detectedDenomination, value);
-      lastDetectedDenomination = detectedDenomination;
-      denominationLastCountedTime[detectedDenomination] = now;
-      _pendingDetectionCount = 0;
-      _pendingNoteKey = null;
-    }
-  }
-
-  String? _extractDetectedDenomination(String rawText) {
-    final normalizedText = rawText.toLowerCase().replaceAll('\n', ' ');
-
-    const denominationPattern = '(2000|500|200|100|50|20|10|5|2|1)';
-    final rupeeBeforeRegex = RegExp(
-      r'(₹|rs\.?|rupee|rupees)\s*' + denominationPattern + r'\b',
-      caseSensitive: false,
-    );
-    final rupeeAfterRegex = RegExp(
-      r'\b' + denominationPattern + r'\s*(₹|rs\.?|rupee|rupees)',
-      caseSensitive: false,
-    );
-
-    final beforeMatch = rupeeBeforeRegex.firstMatch(normalizedText);
-    if (beforeMatch != null) {
-      return beforeMatch.group(2);
-    }
-
-    final afterMatch = rupeeAfterRegex.firstMatch(normalizedText);
-    if (afterMatch != null) {
-      return afterMatch.group(1);
-    }
-
-    // Fallback for partial OCR: denomination without explicit ₹/rupee marker,
-    // but only when other currency-context keywords are present.
-    final hasCurrencyContext = RegExp(
-      r'(reserve\s*bank|rbi|india|bharat|mahatma|gandhi|bank\s*note)',
-      caseSensitive: false,
-    ).hasMatch(normalizedText);
-
-    if (!hasCurrencyContext) {
-      return null;
-    }
-
-    final allDenomMatches = RegExp(
-      r'(?<!\d)' + denominationPattern + r'(?!\d)',
-      caseSensitive: false,
-    ).allMatches(normalizedText);
-
-    final counts = <String, int>{};
-    for (final match in allDenomMatches) {
-      final denom = match.group(1);
-      if (denom == null) continue;
-      counts[denom] = (counts[denom] ?? 0) + 1;
-    }
-
-    if (counts.isEmpty) {
-      return null;
-    }
-
-    // Pick denomination that appears most often in OCR text.
-    String? bestDenomination;
-    int bestCount = 0;
-    counts.forEach((denom, count) {
-      if (count > bestCount) {
-        bestDenomination = denom;
-        bestCount = count;
-      }
-    });
-
-    // Require at least 2 occurrences in fallback mode to reduce false positives.
-    if (bestCount < 2) {
-      return null;
-    }
-
-    return bestDenomination;
-  }
-
-  String _buildNoteFingerprint(String rawText, String denomination) {
-    final cleaned = rawText
-        .toUpperCase()
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .replaceAll(RegExp(r'[^A-Z0-9 ]'), '')
-        .trim();
-
-    final core = cleaned.length > 30 ? cleaned.substring(0, 30) : cleaned;
-    return '$denomination-$core';
-  }
-
-  String? _extractSerialNumber(String rawText) {
-    // Indian currency serial numbers follow patterns:
-    // - Typically 6-10 alphanumeric characters
-    // - Format examples: "1AB234567", "A12B345678", "12A345678"
-    // - Contains both letters and numbers
-
-    final normalizedText = rawText
-        .replaceAll('\n', ' ')
-        .replaceAll(RegExp(r'\s+'), ' ');
-
-    // Pattern 1: Letter followed by digits (common pattern)
-    final pattern1 = RegExp(r'\b([A-Z]{1,3}\d{5,8})\b', caseSensitive: false);
-    final match1 = pattern1.firstMatch(normalizedText);
-    if (match1 != null) {
-      return match1.group(1)?.toUpperCase();
-    }
-
-    // Pattern 2: Digits followed by letter and more digits
-    final pattern2 = RegExp(
-      r'\b(\d{1,3}[A-Z]{1,2}\d{5,7})\b',
-      caseSensitive: false,
-    );
-    final match2 = pattern2.firstMatch(normalizedText);
-    if (match2 != null) {
-      return match2.group(1)?.toUpperCase();
-    }
-
-    // Pattern 3: Mixed alphanumeric (6-10 chars with both letters and numbers)
-    final pattern3 = RegExp(r'\b([A-Z0-9]{6,10})\b', caseSensitive: false);
-    final matches = pattern3.allMatches(normalizedText);
-
-    for (final match in matches) {
-      final candidate = match.group(1);
-      if (candidate != null &&
-          candidate.contains(RegExp(r'[A-Z]', caseSensitive: false)) &&
-          candidate.contains(RegExp(r'\d'))) {
-        // Must have both letters and numbers
-        return candidate.toUpperCase();
-      }
-    }
-
-    // If no clear serial found, create a hash of the full text as fingerprint
-    return null;
-  }
-
-  void _updateCurrencyDisplay(String denomination, int value) {
-    setState(() {
-      // Mark that we've detected this denomination
-      if (denominationCount.containsKey(denomination)) {
-        denominationCount[denomination] = denominationCount[denomination]! + 1;
+        final notesList = result.detectedNotes.map((n) => '₹$n').join(', ');
+        final speech =
+            'Detected ${result.detectedNotes.length} notes: $notesList. '
+            'Total is ${result.totalAmount} rupees.';
+        await _ttsService.speak(speech);
       } else {
-        denominationCount[denomination] = 1;
+        // ✅ FIX 11: Show raw response so you can debug what Gemini actually said
+        final rawMsg = result?.rawResponse ?? 'null result';
+        print('No notes detected. Raw response: $rawMsg');
+
+        setState(
+          () =>
+              _statusMessage = 'No notes found. Keep camera steady and retry.',
+        );
+        await _ttsService.speak(
+          'Could not detect currency. Please hold the camera steadier and ensure notes are well lit.',
+        );
       }
-      // Add to total only once when detected
-      totalAmount += value;
-      detectedCurrency = '₹$denomination';
-    });
-  }
-
-  Future<void> _speakCurrencyDetected(String denomination, int value) async {
-    if (isSpeaking) return;
-
-    isSpeaking = true;
-
-    try {
-      String currencyName = currencyNameEnglish[denomination] ?? denomination;
-
-      // Speak in English - announce the actual currency value
-      await flutterTts.setLanguage('en-US');
-      await flutterTts.setVolume(1.0);
-      await flutterTts.speak(
-        'Detected: $currencyName rupees. Total: $totalAmount rupees',
-      );
-
-      // Wait for English to finish
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      // Speak in Hindi - announce the actual currency value
-      await flutterTts.setLanguage('hi-IN');
-      await flutterTts.setVolume(1.0);
-      String hindiText = _getHindiDenomination(denomination);
-      await flutterTts.speak(
-        'पहचाना गया: $hindiText। कुल राशि: $totalAmount रुपये',
-      );
     } catch (e) {
-      print('Error speaking: $e');
+      print('Capture error: $e');
+      setState(() => _statusMessage = 'Error: $e');
+      await _ttsService.speak('An error occurred. Please try again.');
     } finally {
-      isSpeaking = false;
+      if (mounted) setState(() => _isDetecting = false);
     }
   }
 
-  String _getCountText(int count) {
-    switch (count) {
-      case 1:
-        return 'One';
-      case 2:
-        return 'Two';
-      case 3:
-        return 'Three';
-      case 4:
-        return 'Four';
-      case 5:
-        return 'Five';
-      default:
-        return count.toString();
+  Future<void> _speakResult() async {
+    if (_lastResult == null) {
+      await _ttsService.speak('No result yet. Please scan currency first.');
+      return;
     }
+    final speech =
+        'Total amount is ${_lastResult!.totalAmount} rupees. '
+        'Notes detected: ${_lastResult!.detectedNotes.map((n) => "₹$n").join(", ")}.';
+    await _ttsService.speak(speech);
   }
 
-  String _getHindiCountText(int count, String hindiDenom) {
-    final hindiCounts = {1: 'एक', 2: 'दो', 3: 'तीन', 4: 'चार', 5: 'पांच'};
-    String countStr = hindiCounts[count] ?? count.toString();
-    return '$countStr $hindiDenom नोट';
+  void _clearResult() {
+    setState(() {
+      _lastResult = null;
+      _statusMessage = 'Cleared. Tap scan to start again.';
+    });
+    _ttsService.speak('Results cleared.');
   }
 
-  String _getHindiDenomination(String denomination) {
-    final hindiMap = {
-      '2000': 'दो हजार',
-      '500': 'पांच सौ',
-      '200': 'दो सौ',
-      '100': 'एक सौ',
-      '50': 'पचास',
-      '20': 'बीस',
-      '10': 'दस',
-      '5': 'पांच',
-      '2': 'दो',
-      '1': 'एक',
-    };
-
-    return hindiMap[denomination] ?? 'रुपये';
+  void _restart() {
+    _clearResult();
+    _startScanning();
+    _ttsService.speak('Restarting scan.');
   }
 
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _startListeningForRestart() async {
+    if (_speechToText.isListening) return;
+    await _speechToText.listen(
+      onResult: (result) {
+        if (result.recognizedWords.toLowerCase().contains('restart')) {
+          _restart();
+          _speechToText.stop();
+        }
+      },
+    );
+    _ttsService.speak('Listening for restart command.');
+  }
+
+  void _handleKey(RawKeyEvent event) {
+    if (event is RawKeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.audioVolumeUp) {
+      _startListeningForRestart();
+    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!isCameraInitialized) {
-      return;
-    }
-
+    if (_cameraController == null) return;
     if (state == AppLifecycleState.inactive) {
-      detectionTimer?.cancel();
-      _cameraController.dispose();
-      _speechToText.stop();
-      _isListeningForCommands = false;
+      _cameraController?.dispose();
     } else if (state == AppLifecycleState.resumed) {
-      _initializeCamera();
-      _startListeningForCommands();
+      _startCamera(_cameras.first);
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    detectionTimer?.cancel();
-    _cameraController.dispose();
-    _textRecognizer.close();
-    _objectDetector.close();
+    _scanTimer?.cancel();
+    _cameraController?.dispose();
     _speechToText.stop();
-    flutterTts.stop();
+    _ttsService.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Rupee Detector'),
-        backgroundColor: Colors.deepPurple,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _goBackToMain,
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person),
-            onPressed: () async {
-              final user = FirebaseAuth.instance.currentUser;
-              if (user == null) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-                );
-                return;
-              }
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              );
-            },
+    return RawKeyboardListener(
+      focusNode: FocusNode()..requestFocus(),
+      onKey: _handleKey,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          title: const Text(
+            'Currency Detection',
+            style: TextStyle(color: Colors.white, fontSize: 20),
           ),
-        ],
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () {
+              _ttsService.speak('Going back');
+              Navigator.pop(context);
+            },
+            tooltip: 'Go back',
+          ),
+          actions: [
+            if (_lastResult != null)
+              IconButton(
+                icon: const Icon(Icons.volume_up, color: Colors.white),
+                onPressed: _speakResult,
+                tooltip: 'Repeat total',
+              ),
+          ],
+        ),
+        body: Column(
+          children: [
+            // Camera Preview
+            Expanded(flex: 3, child: _buildCameraPreview()),
+
+            // Status Bar
+            Container(
+              width: double.infinity,
+              color: Colors.grey[900],
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+              child: Text(
+                _statusMessage,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _isScanning ? Colors.greenAccent : Colors.white70,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+
+            // Result Panel
+            if (_lastResult != null) _buildResultPanel(),
+
+            // Action Buttons
+            _buildActionButtons(),
+          ],
+        ),
       ),
-      body: !isCameraInitialized
-          ? const Center(
+    );
+  }
+
+  Widget _buildCameraPreview() {
+    if (!_isCameraReady || _cameraController == null) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 16),
+            Text(
+              'Initializing camera...',
+              style: TextStyle(color: Colors.white),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Stack(
+      children: [
+        SizedBox.expand(child: CameraPreview(_cameraController!)),
+
+        // Scanning overlay
+        if (_isScanning)
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.greenAccent, width: 3),
+            ),
+          ),
+
+        // Processing indicator
+        if (_isDetecting)
+          Container(
+            color: Colors.black38,
+            child: const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Initializing Camera...'),
-                ],
-              ),
-            )
-          : SafeArea(
-              child: Column(
-                children: [
-                  Expanded(
-                    flex: 6,
-                    child: Container(
-                      width: double.infinity,
-                      color: Colors.black,
-                      child: Center(
-                        child: AspectRatio(
-                          aspectRatio: _cameraController.value.aspectRatio,
-                          child: CameraPreview(_cameraController),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    flex: 4,
-                    child: Container(
-                      width: double.infinity,
-                      decoration: const BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(20),
-                          topRight: Radius.circular(20),
-                        ),
-                      ),
-                      padding: const EdgeInsets.all(20.0),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'Last Detected',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(color: Colors.white70),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              detectedCurrency,
-                              style: const TextStyle(
-                                fontSize: 32,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.greenAccent,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.deepPurple.withOpacity(0.3),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                children: [
-                                  const Text(
-                                    'Total Amount',
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    '₹$totalAmount',
-                                    style: const TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            if (denominationCount.isNotEmpty) ...[
-                              const Text(
-                                'Denominations Detected:',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: denominationCount.entries
-                                    .map(
-                                      (entry) => Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 6,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.greenAccent,
-                                          borderRadius: BorderRadius.circular(
-                                            20,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          '₹${entry.key} x${entry.value}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black,
-                                          ),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ],
-                            const SizedBox(height: 20),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                ElevatedButton.icon(
-                                  onPressed: _resetDetection,
-                                  icon: const Icon(Icons.refresh),
-                                  label: const Text('Reset'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.deepPurple,
-                                  ),
-                                ),
-                                ElevatedButton.icon(
-                                  onPressed: () => _speakTotalAmount(),
-                                  icon: const Icon(Icons.volume_up),
-                                  label: const Text('Speak Total'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.deepPurple,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            ElevatedButton(
-                              onPressed: _goBackToMain,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.redAccent,
-                              ),
-                              child: const Text('Back'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  CircularProgressIndicator(color: Colors.greenAccent),
+                  SizedBox(height: 12),
+                  Text(
+                    'Analyzing...',
+                    style: TextStyle(color: Colors.white, fontSize: 18),
                   ),
                 ],
               ),
             ),
+          ),
+      ],
     );
   }
 
-  void _resetDetection() async {
-    if (_isListeningForCommands) {
-      await _speechToText.stop();
-      _isListeningForCommands = false;
-    }
-
-    setState(() {
-      totalAmount = 0;
-      denominationCount.clear();
-      detectedCurrency = 'Waiting for detection...';
-      lastDetectedDenomination = null;
-      denominationLastCountedTime.clear();
-      _pendingDenomination = null;
-      _pendingNoteKey = null;
-      _pendingDetectionCount = 0;
-      _detectedSerialNumbers.clear();
-      _lastSerialNumber = null;
-    });
-    _showErrorSnackBar('Detection reset');
-
-    // Speak reset confirmation
-    try {
-      await flutterTts.setLanguage('en-US');
-      await flutterTts.speak('Reset');
-
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      await flutterTts.setLanguage('hi-IN');
-      await flutterTts.speak('रीसेट');
-    } catch (e) {
-      print('Error speaking reset: $e');
-    } finally {
-      _startListeningForCommands();
-    }
+  Widget _buildResultPanel() {
+    final result = _lastResult!;
+    return Container(
+      color: Colors.grey[850],
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Total
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Total Amount:',
+                style: TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+              Text(
+                '₹${result.totalAmount}',
+                style: const TextStyle(
+                  color: Colors.greenAccent,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Notes chips
+          Wrap(
+            spacing: 8,
+            children: result.detectedNotes.map((note) {
+              return Chip(
+                label: Text(
+                  '₹$note',
+                  style: const TextStyle(color: Colors.black),
+                ),
+                backgroundColor: Colors.greenAccent,
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
   }
 
-  Future<void> _speakTotalAmount() async {
-    if (totalAmount == 0) {
-      await flutterTts.setLanguage('en-US');
-      await flutterTts.setVolume(1.0);
-      await flutterTts.speak('No currency detected yet');
-      return;
-    }
-
-    try {
-      // Build list of detected currency values in English
-      List<String> detectedNames = [];
-      List<String> hindiNames = [];
-
-      denominationCount.forEach((denomination, count) {
-        detectedNames.add(currencyNameEnglish[denomination] ?? denomination);
-        hindiNames.add(_getHindiDenomination(denomination));
-      });
-
-      // Speak in English - list all detected currency values
-      await flutterTts.setLanguage('en-US');
-      await flutterTts.setVolume(1.0);
-      String namesList = detectedNames.join(', ');
-      await flutterTts.speak(
-        'Detected currencies: $namesList. Total amount: $totalAmount rupees',
-      );
-
-      // Wait for English to finish
-      await Future.delayed(const Duration(milliseconds: 1500));
-
-      // Speak in Hindi
-      await flutterTts.setLanguage('hi-IN');
-      await flutterTts.setVolume(1.0);
-      String hindiNamesList = hindiNames.join(', ');
-      await flutterTts.speak(
-        'पहचाने गए मुद्राएं: $hindiNamesList। कुल राशि: $totalAmount रुपये',
-      );
-    } catch (e) {
-      print('Error speaking total: $e');
-    }
+  Widget _buildActionButtons() {
+    return Container(
+      color: Colors.black,
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          // Scan Button (main CTA - large for accessibility)
+          Expanded(
+            flex: 3,
+            child: ElevatedButton.icon(
+              onPressed: _isCameraReady ? _startScanning : null,
+              icon: Icon(
+                _isScanning ? Icons.stop_circle : Icons.document_scanner,
+                size: 28,
+              ),
+              label: Text(
+                _isScanning ? 'Stop Scan' : 'Start Scan',
+                style: const TextStyle(fontSize: 18),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isScanning
+                    ? Colors.redAccent
+                    : Colors.greenAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Restart Button
+          if (_lastResult != null)
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _restart,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Restart'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.grey[700],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

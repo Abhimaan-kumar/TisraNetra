@@ -34,11 +34,50 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
   int _continuousReadLineIndex = 0; // Track current line being read
   String _detectedText = '';
   String _lastReadText = ''; // Track previously read text
+  String _lastCapturedText = ''; // Track last OCR result to avoid repeats
+
+  // Fields used for stable reading and avoiding re-reads
+  String _lastSpokenNormalizedText = '';
+  String _pendingStableText = '';
+  String _pendingStableTextNormalized = '';
+  Timer? _stableReadTimer;
+  final Duration _stableReadDelay = const Duration(milliseconds: 1200);
+
+  DateTime _lastSpokenTime = DateTime.fromMillisecondsSinceEpoch(0);
+  final Duration _minReadInterval = const Duration(seconds: 4);
+
+  final Map<String, String> _ocrCorrectionMap = {
+    '0': 'O',
+    '1': 'I',
+    '5': 'S',
+    '6': 'G',
+    '8': 'B',
+    'ﬁ': 'fi',
+    'ﬂ': 'fl',
+  };
+
+  final Map<String, String> _commonWordFixes = {
+    'teh': 'the',
+    'adn': 'and',
+    'languge': 'language',
+    'recongnition': 'recognition',
+    'scaning': 'scanning',
+    'readng': 'reading',
+  };
+
+  int _stableCaptureCount = 0; // Count of consecutive similar captures
+  final int _stableCaptureThreshold =
+      2; // Number of repeats required to consider text stable
   DateTime? _lastReadTime; // Track last read timestamp
+  DateTime? _lastAutoCaptureTime;
+  Duration _autoCaptureInterval = const Duration(seconds: 5);
+  int _noTextCaptureCount = 0; // Count consecutive captures with no text
+  final int _noTextCaptureThreshold =
+      3; // How many times to see no text before showing 'No text found'
   final int _textReadCooldownSeconds =
       3; // Minimum gap between readings same text
   final double _textSimilarityThreshold =
-      0.85; // 85% similarity = treat as same text
+      0.92; // 92% similarity = treat as same text (helps avoid re-reading on small framing shifts)
   String _statusMessage = 'Initializing camera...';
   List<String> _detectedLanguages = [];
   bool _speechAvailable = false;
@@ -283,7 +322,24 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
   void _startAutoCapture() {
     if (!mounted || !_autoCapture) return;
 
-    Future.delayed(const Duration(seconds: 5), () async {
+    final now = DateTime.now();
+    if (_lastAutoCaptureTime != null &&
+        now.difference(_lastAutoCaptureTime!) < _autoCaptureInterval) {
+      // Wait for the interval to pass before the next capture
+      Future.delayed(
+        _autoCaptureInterval - now.difference(_lastAutoCaptureTime!),
+        () {
+          if (mounted && _autoCapture) {
+            _startAutoCapture();
+          }
+        },
+      );
+      return;
+    }
+
+    _lastAutoCaptureTime = now;
+
+    Future.delayed(const Duration(seconds: 1), () async {
       if (mounted && _autoCapture && !_isProcessing && _isCameraInitialized) {
         try {
           await _captureAndRecognizeText(silent: true);
@@ -295,6 +351,26 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
         }
       }
     });
+  }
+
+  bool _canSpeakText(String normalizedText) {
+    if (normalizedText.isEmpty) return false;
+    final now = DateTime.now();
+    if (now.difference(_lastSpokenTime) < _minReadInterval) {
+      debugPrint('Skipping speak: cooldown active');
+      return false;
+    }
+    if (_lastSpokenNormalizedText.isNotEmpty) {
+      final similarity = _calculateTextSimilarity(
+        normalizedText,
+        _lastSpokenNormalizedText,
+      );
+      if (similarity >= _textSimilarityThreshold) {
+        debugPrint('Skipping speak: similar text ($similarity)');
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _captureAndRecognizeText({bool silent = false}) async {
@@ -328,7 +404,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     InputImage? inputImage;
 
     try {
-      // Take picture with error handling
       try {
         image = await _cameraController!.takePicture().timeout(
           const Duration(seconds: 5),
@@ -348,10 +423,8 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
         return;
       }
 
-      // Small delay to ensure file is written
       await Future.delayed(const Duration(milliseconds: 150));
 
-      // Verify file exists
       final imageFile = File(image.path);
       if (!await imageFile.exists()) {
         debugPrint('Captured image file does not exist: ${image.path}');
@@ -364,7 +437,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
         return;
       }
 
-      // Check brightness and auto-enable torch if dark
       await _checkAndAutoEnableTorch(image.path);
 
       try {
@@ -381,7 +453,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
         return;
       }
 
-      // Process image with single recognizer
       String detectedText = '';
 
       if (_textRecognizer != null && _recognizerReady) {
@@ -395,8 +466,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
           debugPrint('Text recognized: $detectedText');
         } catch (e) {
           debugPrint('Text recognition error: $e');
-
-          // If recognizer crashes, mark it as not ready and recreate
           if (e.toString().contains('native') ||
               e.toString().contains('platform')) {
             debugPrint(
@@ -432,11 +501,18 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
       debugPrint('Combined text: $combinedText');
 
       if (combinedText.isEmpty) {
-        if (!silent && mounted) {
-          setState(() => _statusMessage = 'No text found');
+        _noTextCaptureCount++;
+        if (_noTextCaptureCount >= _noTextCaptureThreshold) {
+          if (!silent && mounted) {
+            setState(() => _statusMessage = 'No text found');
+          }
+        } else {
+          if (mounted) {
+            setState(() => _statusMessage = 'Looking for text...');
+          }
         }
       } else {
-        // Auto-capture only processes if significant text found
+        _noTextCaptureCount = 0;
         if (silent && combinedText.length < 5) {
           if (mounted) {
             setState(() => _isProcessing = false);
@@ -444,87 +520,82 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
           return;
         }
 
-        // Check if text is similar to last read (using similarity check)
-        double textSimilarity = _calculateTextSimilarity(
-          combinedText.trim(),
-          _lastReadText.trim(),
-        );
-        bool isSimilarText =
-            textSimilarity >= _textSimilarityThreshold ||
-            combinedText.trim().isEmpty;
-        bool isWithinCooldown = false;
+        final rawText = combinedText.trim();
+        final processedText = _postProcessText(rawText);
+        final normalizedText = _normalizeForComparison(processedText);
 
-        if (_lastReadTime != null &&
-            isSimilarText &&
-            _lastReadText.isNotEmpty) {
-          final timeSinceLastRead = DateTime.now()
-              .difference(_lastReadTime!)
-              .inSeconds;
-          isWithinCooldown = timeSinceLastRead < _textReadCooldownSeconds;
+        if (!silent) {
+          if (!_canSpeakText(normalizedText)) {
+            if (mounted) {
+              setState(() => _statusMessage = 'Already read recently');
+            }
+            return;
+          }
 
-          debugPrint(
-            'Text similarity check: similarity=$textSimilarity (${(textSimilarity * 100).toStringAsFixed(1)}%), '
-            'cooldown=$isWithinCooldown, timeSince=${timeSinceLastRead}s',
-          );
-        }
-
-        // Handle continuous reading for auto-capture
-        if (silent && isSimilarText && _lastReadText.isNotEmpty) {
-          // In continuous mode - continue reading next lines
-          debugPrint(
-            'Continuous reading mode: similarity=${(textSimilarity * 100).toStringAsFixed(1)}%, '
-            'reading from line ${_continuousReadLineIndex + 1}',
-          );
-          _isInContinuousReadMode = true;
-
-          // Read only the new/next lines
-          await _continuousRead(combinedText);
-          return;
-        } else if (!silent) {
-          // Manual capture - reset continuous mode
-          _isInContinuousReadMode = false;
-          _continuousReadLineIndex = 0;
-        }
-
-        // Skip reading if similar text and within cooldown period (manual mode)
-        if (isWithinCooldown && isSimilarText && !silent) {
-          debugPrint(
-            'Skipping similar text read (${(textSimilarity * 100).toStringAsFixed(1)}% similar, within cooldown)',
-          );
+          _lastCapturedText = processedText;
+          _lastSpokenNormalizedText = normalizedText;
+          _lastSpokenTime = DateTime.now();
+          _lastReadText = processedText;
+          _detectLanguagesFromText(processedText);
           if (mounted) {
             setState(() {
-              _statusMessage = 'Similar text (already read)';
+              _detectedText = processedText;
+              final langInfo = _detectedLanguages.isNotEmpty
+                  ? _detectedLanguages.join(', ')
+                  : 'English';
+              _statusMessage = 'Reading: $langInfo text';
             });
           }
+
+          try {
+            await HapticFeedback.lightImpact();
+          } catch (_) {}
+          await _speak(processedText);
           return;
         }
 
-        // Detect language directly from combined text
-        _detectLanguagesFromText(combinedText);
+        final normalizedLastCapture = _normalizeForComparison(
+          _lastCapturedText,
+        );
+        final captureSimilarity = _calculateTextSimilarity(
+          normalizedText,
+          normalizedLastCapture,
+        );
+        final isSameCapture = captureSimilarity >= _textSimilarityThreshold;
 
-        if (mounted) {
-          setState(() {
-            _detectedText = combinedText;
-            final langInfo = _detectedLanguages.isNotEmpty
-                ? _detectedLanguages.join(', ')
-                : 'English';
-            _statusMessage = 'Reading: $langInfo text';
-          });
+        _autoCaptureInterval = isSameCapture
+            ? const Duration(seconds: 10)
+            : const Duration(seconds: 5);
+
+        if (isSameCapture) {
+          _stableCaptureCount++;
+        } else {
+          _stableCaptureCount = 1;
+          _lastCapturedText = processedText;
         }
 
-        // Update last read text and timestamp
-        _lastReadText = combinedText;
-        _lastReadTime = DateTime.now();
+        if (_stableCaptureCount >= _stableCaptureThreshold) {
+          if (!_canSpeakText(normalizedText)) {
+            if (mounted) {
+              setState(() => _statusMessage = 'Text stable but recently read');
+            }
+            return;
+          }
+          if (mounted) {
+            setState(
+              () =>
+                  _statusMessage = 'Stable text detected. Preparing to read...',
+            );
+          }
+          _scheduleStableRead(processedText, normalizedText, silent: silent);
+          return;
+        }
 
-        // Update continuous read line index after reading full text
-        final lines = combinedText.split('\n');
-        _continuousReadLineIndex = lines.length;
-        debugPrint(
-          'Full text read, set continuousReadLineIndex to ${lines.length}',
-        );
-
-        // Immediately speak the detected text for blind users
-        await _speak(_detectedText);
+        debugPrint('Waiting for stable capture ($_stableCaptureCount)');
+        if (mounted) {
+          setState(() => _statusMessage = 'Holding still for stable read...');
+        }
+        return;
       }
     } catch (e) {
       debugPrint('Text recognition error: $e');
@@ -535,10 +606,8 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
         _speak('Unable to read text. Please try again');
       }
     } finally {
-      // Cleanup resources - critical to prevent crashes
       inputImage = null;
 
-      // Delete the captured image file immediately
       if (image != null) {
         try {
           final file = File(image.path);
@@ -560,7 +629,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
   void _detectLanguagesFromText(String text) {
     Set<String> languages = {};
 
-    // Simple language detection based on Unicode ranges
     bool hasHindi = false;
     bool hasEnglish = false;
 
@@ -584,7 +652,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     try {
       if (text.isEmpty || !mounted) return;
 
-      // Non-blocking speak without waiting
       try {
         await _flutterTts.stop();
       } catch (e) {
@@ -602,24 +669,24 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
           await _flutterTts.setLanguage('hi-IN');
           await _flutterTts.setSpeechRate(0.4);
           await _flutterTts.setPitch(1.0);
-          _flutterTts.speak(text); // Fire and forget
+          _flutterTts.speak(text);
         } else if (hasEnglish && !hasHindi) {
           debugPrint('Speaking in English: $text');
           await _flutterTts.setLanguage('en-IN');
           await _flutterTts.setSpeechRate(0.5);
           await _flutterTts.setPitch(1.0);
-          _flutterTts.speak(text); // Fire and forget
+          _flutterTts.speak(text);
         } else if (hasHindi && hasEnglish) {
           debugPrint('Speaking mixed content in Hindi: $text');
           await _flutterTts.setLanguage('hi-IN');
           await _flutterTts.setSpeechRate(0.4);
           await _flutterTts.setPitch(1.0);
-          _flutterTts.speak(text); // Fire and forget
+          _flutterTts.speak(text);
         } else {
           debugPrint('Speaking default English: $text');
           await _flutterTts.setLanguage('en-IN');
           await _flutterTts.setSpeechRate(0.5);
-          _flutterTts.speak(text); // Fire and forget
+          _flutterTts.speak(text);
         }
       } catch (e) {
         debugPrint('TTS speak error: $e');
@@ -629,41 +696,149 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     }
   }
 
-  // Calculate text similarity using simple algorithm
-  double _calculateTextSimilarity(String text1, String text2) {
-    if (text1.isEmpty && text2.isEmpty) return 1.0;
-    if (text1.isEmpty || text2.isEmpty) return 0.0;
-
-    // Remove common whitespace/punctuation differences
-    final normalized1 = text1.toLowerCase().replaceAll(
-      RegExp(r'[\s.,!?;:"-]+'),
-      '',
-    );
-    final normalized2 = text2.toLowerCase().replaceAll(
-      RegExp(r'[\s.,!?;:"-]+'),
-      '',
-    );
-
-    if (normalized1 == normalized2) return 1.0;
-
-    // Use Levenshtein-like similarity (simple version)
-    final minLength = normalized1.length < normalized2.length
-        ? normalized1.length
-        : normalized2.length;
-    final maxLength = normalized1.length > normalized2.length
-        ? normalized1.length
-        : normalized2.length;
-
-    int matches = 0;
-    for (int i = 0; i < minLength; i++) {
-      if (normalized1[i] == normalized2[i]) matches++;
-    }
-
-    double similarity = matches / maxLength;
-    return similarity;
+  String _normalizeForComparison(String text) {
+    return text.toLowerCase().replaceAll(RegExp(r'[\s\W_]+'), '').trim();
   }
 
-  // Check image brightness and auto-enable torch if dark
+  String _postProcessText(String text) {
+    String cleaned = text
+        .replaceAll('\u00A0', ' ')
+        .replaceAll(RegExp(r'[\r\n]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    _ocrCorrectionMap.forEach((wrong, right) {
+      cleaned = cleaned.replaceAll(wrong, right);
+    });
+
+    final words = cleaned.split(' ');
+    for (int i = 0; i < words.length; i++) {
+      final key = words[i].toLowerCase();
+      if (_commonWordFixes.containsKey(key)) {
+        words[i] = _commonWordFixes[key]!;
+      }
+    }
+    cleaned = words.join(' ').trim();
+    return cleaned;
+  }
+
+  void _scheduleStableRead(
+    String text,
+    String normalizedText, {
+    bool silent = false,
+  }) {
+    _pendingStableText = text;
+    _pendingStableTextNormalized = normalizedText;
+    _stableReadTimer?.cancel();
+    _stableReadTimer = Timer(_stableReadDelay, () async {
+      if (_pendingStableTextNormalized != normalizedText) return;
+
+      if (!_canSpeakText(normalizedText)) {
+        if (mounted) {
+          setState(() => _statusMessage = 'Stable text unchanged');
+        }
+        return;
+      }
+
+      final newTextToRead = _extractNewText(
+        _lastReadText,
+        _pendingStableText,
+      ).trim();
+      final textToRead = newTextToRead.isNotEmpty
+          ? newTextToRead
+          : _pendingStableText.trim();
+
+      if (textToRead.isEmpty) {
+        if (mounted) {
+          setState(() => _statusMessage = 'No new text detected');
+        }
+        return;
+      }
+
+      _lastReadText = _pendingStableText;
+      _lastSpokenNormalizedText = normalizedText;
+      _lastSpokenTime = DateTime.now();
+
+      _detectLanguagesFromText(_pendingStableText);
+      if (mounted) {
+        setState(() {
+          _detectedText = _pendingStableText;
+          final langInfo = _detectedLanguages.isNotEmpty
+              ? _detectedLanguages.join(', ')
+              : 'English';
+          _statusMessage = 'Reading: $langInfo text';
+        });
+      }
+
+      _continuousReadLineIndex = _pendingStableText.split('\n').length;
+
+      if (!silent) {
+        try {
+          await HapticFeedback.lightImpact();
+        } catch (_) {}
+        await _speak(textToRead);
+      } else {
+        if (mounted) {
+          setState(() => _statusMessage = 'Text stabilized (silent mode)');
+        }
+      }
+    });
+  }
+
+  String _extractNewText(String previous, String current) {
+    final prevLines = previous.split('\n');
+    final currLines = current.split('\n');
+    int firstDiff = 0;
+
+    while (firstDiff < prevLines.length &&
+        firstDiff < currLines.length &&
+        _normalizeForComparison(prevLines[firstDiff]) ==
+            _normalizeForComparison(currLines[firstDiff])) {
+      firstDiff++;
+    }
+
+    if (firstDiff >= currLines.length) return '';
+    return currLines.sublist(firstDiff).join('\n');
+  }
+
+  double _calculateTextSimilarity(String text1, String text2) {
+    final normalized1 = text1.toLowerCase().replaceAll(RegExp(r'[\s\W_]+'), '');
+    final normalized2 = text2.toLowerCase().replaceAll(RegExp(r'[\s\W_]+'), '');
+
+    if (normalized1.isEmpty && normalized2.isEmpty) return 1.0;
+    if (normalized1.isEmpty || normalized2.isEmpty) return 0.0;
+
+    final dist = _levenshteinDistance(normalized1, normalized2);
+    final maxLen = normalized1.length > normalized2.length
+        ? normalized1.length
+        : normalized2.length;
+    final similarity = 1.0 - (dist / maxLen);
+    return similarity.clamp(0.0, 1.0);
+  }
+
+  int _levenshteinDistance(String s, String t) {
+    final m = s.length;
+    final n = t.length;
+    if (m == 0) return n;
+    if (n == 0) return m;
+
+    final dp = List.generate(m + 1, (_) => List<int>.filled(n + 1, 0));
+    for (int i = 0; i <= m; i++) dp[i][0] = i;
+    for (int j = 0; j <= n; j++) dp[0][j] = j;
+
+    for (int i = 1; i <= m; i++) {
+      for (int j = 1; j <= n; j++) {
+        final cost = s[i - 1] == t[j - 1] ? 0 : 1;
+        dp[i][j] = [
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + cost,
+        ].reduce((a, b) => a < b ? a : b);
+      }
+    }
+    return dp[m][n];
+  }
+
   Future<void> _checkAndAutoEnableTorch(String imagePath) async {
     try {
       final file = File(imagePath);
@@ -672,7 +847,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
       final bytes = await file.readAsBytes();
       if (bytes.isEmpty) return;
 
-      // Calculate average brightness from first 1000 bytes
       int brightnessSum = 0;
       int sampleSize = bytes.length > 1000 ? 1000 : bytes.length;
 
@@ -685,7 +859,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
         'Average brightness: ${averageBrightness.toStringAsFixed(1)}/255',
       );
 
-      // If brightness < 100, enable torch automatically
       if (averageBrightness < 100 && !_torchEnabled) {
         debugPrint('Dark environment detected, enabling torch');
         await _enableTorch();
@@ -695,7 +868,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     }
   }
 
-  // Enable camera torch
   Future<void> _enableTorch() async {
     try {
       if (_cameraController == null) return;
@@ -710,7 +882,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     }
   }
 
-  // Disable camera torch
   Future<void> _disableTorch() async {
     try {
       if (_cameraController == null) return;
@@ -725,12 +896,10 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     }
   }
 
-  // Continuous reading - reads only new lines from previous position
   Future<void> _continuousRead(String currentText) async {
     try {
       final lines = currentText.split('\n');
 
-      // If text has grown, read new lines from last position
       if (lines.length > _continuousReadLineIndex) {
         final newLines = lines.sublist(_continuousReadLineIndex);
         final textToRead = newLines.join('\n').trim();
@@ -742,9 +911,7 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
           await _speak(textToRead);
           _continuousReadLineIndex = lines.length;
         }
-      }
-      // If text is same length or shorter, continue from next line
-      else if (lines.length <= _continuousReadLineIndex) {
+      } else if (lines.length <= _continuousReadLineIndex) {
         _continuousReadLineIndex = lines.length;
         debugPrint('Continuing reading, no new lines to read yet');
       }
@@ -753,7 +920,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     }
   }
 
-  // Reset continuous reading mode
   void _resetContinuousRead() {
     _isInContinuousReadMode = false;
     _continuousReadLineIndex = 0;
@@ -770,6 +936,8 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
     _continuousReadLineIndex = 0;
     _lastReadTime = null;
     _lastReadText = '';
+    _stableReadTimer?.cancel();
+    _pendingStableText = '';
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     try {
       _disableTorch();
@@ -848,7 +1016,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
       body: _isCameraInitialized
           ? Column(
               children: [
-                // Camera Preview
                 Expanded(
                   flex: 3,
                   child: Stack(
@@ -859,7 +1026,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
                           child: CameraPreview(_cameraController!),
                         ),
                       ),
-                      // Overlay with guide
                       Center(
                         child: Container(
                           width: MediaQuery.of(context).size.width * 0.8,
@@ -880,7 +1046,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
                           ),
                         ),
                       ),
-                      // Status indicator
                       Positioned(
                         top: 16,
                         left: 16,
@@ -922,7 +1087,6 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen> {
                     ],
                   ),
                 ),
-                // Detected Text Display
                 Expanded(
                   flex: 2,
                   child: Container(
