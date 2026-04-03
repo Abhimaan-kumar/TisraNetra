@@ -63,7 +63,6 @@ class _CurrencyScreenState extends State<CurrencyScreen>
     await _speechToText.initialize();
   }
 
-  // ✅ FIX 7: Use HIGH resolution for better note recognition
   Future<void> _startCamera(CameraDescription camera) async {
     final controller = CameraController(
       camera,
@@ -74,7 +73,6 @@ class _CurrencyScreenState extends State<CurrencyScreen>
 
     try {
       await controller.initialize();
-      // ✅ FIX 8: Set focus mode to auto for sharp images
       await controller.setFocusMode(FocusMode.auto);
       await controller.setExposureMode(ExposureMode.auto);
       await controller.setFlashMode(FlashMode.off);
@@ -133,7 +131,6 @@ class _CurrencyScreenState extends State<CurrencyScreen>
     });
 
     try {
-      // ✅ FIX 9: Re-trigger autofocus before capturing
       await _cameraController!.setFocusMode(FocusMode.auto);
       await Future.delayed(
         const Duration(milliseconds: 600),
@@ -144,7 +141,6 @@ class _CurrencyScreenState extends State<CurrencyScreen>
 
       print('Image size: ${imageBytes.length} bytes'); // Should be > 100KB
 
-      // ✅ FIX 10: Reject blurry/too-small images
       if (imageBytes.length < 50000) {
         setState(() => _statusMessage = 'Image too small, retrying...');
         setState(() => _isDetecting = false);
@@ -167,7 +163,6 @@ class _CurrencyScreenState extends State<CurrencyScreen>
             'Total is ${result.totalAmount} rupees.';
         await _ttsService.speak(speech);
       } else {
-        // ✅ FIX 11: Show raw response so you can debug what Gemini actually said
         final rawMsg = result?.rawResponse ?? 'null result';
         print('No notes detected. Raw response: $rawMsg');
 
