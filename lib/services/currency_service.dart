@@ -20,7 +20,7 @@ class CurrencyService {
 
   CurrencyService() {
     _model = GenerativeModel(
-      model: 'gemini-2.5-flash', // ✅ FIX 1: Updated model name
+      model: 'gemini-2.5-flash',
       apiKey: _apiKey,
       generationConfig: GenerationConfig(
         temperature: 0.1,
@@ -50,7 +50,6 @@ If no currency found:
 {"notes": [], "total": 0}
 ''';
 
-      // ✅ FIX 2: Pass raw bytes directly — no double base64 encoding
       final response = await _model.generateContent([
         Content.multi([
           DataPart(
@@ -72,7 +71,6 @@ If no currency found:
         );
       }
 
-      // ✅ FIX 3: Strip markdown fences then extract JSON
       String jsonStr = text.replaceAll(RegExp(r'```json|```'), '').trim();
       final jsonMatch = RegExp(r'\{[^{}]*\}').firstMatch(jsonStr);
 
