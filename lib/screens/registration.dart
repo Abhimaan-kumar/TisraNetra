@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'login.dart'; // added import
 import 'home_screen.dart'; // added
-import 'volunteer.dart'; // added
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
