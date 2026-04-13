@@ -40,6 +40,10 @@ class SignalingService {
   MediaStream? _localStream;
   final List<StreamSubscription> _subs = [];
 
+  // State for queuing candidates
+  bool _isRemoteSet = false;
+  final List<RTCIceCandidate> _remoteCandidatesQueue = [];
+
   // Public renderers
   final RTCVideoRenderer localRenderer = RTCVideoRenderer();
   final RTCVideoRenderer remoteRenderer = RTCVideoRenderer();
@@ -48,11 +52,26 @@ class SignalingService {
   VoidCallback? onConnected;
   VoidCallback? onDisconnected;
 
-  // ICE servers (Google STUN)
+  // ICE servers (STUN & TURN)
   static const Map<String, dynamic> _config = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
+      {'urls': 'stun:global.stun.twilio.com:3478'},
+      {
+        'urls': 'turn:openrelay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:openrelay.metered.ca:443',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:openrelay.metered.ca:443?transport=tcp',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      }
     ],
   };
 
@@ -60,6 +79,22 @@ class SignalingService {
   Future<void> init() async {
     await localRenderer.initialize();
     await remoteRenderer.initialize();
+  }
+
+  void _addIceCandidate(RTCIceCandidate candidate) {
+    if (_isRemoteSet && _pc != null) {
+      _pc!.addCandidate(candidate);
+    } else {
+      _remoteCandidatesQueue.add(candidate);
+    }
+  }
+
+  void _onRemoteDescriptionSet() {
+    _isRemoteSet = true;
+    for (final candidate in _remoteCandidatesQueue) {
+      _pc?.addCandidate(candidate);
+    }
+    _remoteCandidatesQueue.clear();
   }
 
   // ──────────────────── start call (client) ──────────────
@@ -125,6 +160,7 @@ class SignalingService {
       final currentRemote = await _pc!.getRemoteDescription();
       if (currentRemote == null) {
         await _pc!.setRemoteDescription(answer);
+        _onRemoteDescriptionSet();
       }
     }));
 
@@ -136,7 +172,7 @@ class SignalingService {
       for (final change in snap.docChanges) {
         if (change.type == DocumentChangeType.added) {
           final d = change.doc.data() as Map<String, dynamic>;
-          _pc!.addCandidate(RTCIceCandidate(
+          _addIceCandidate(RTCIceCandidate(
             d['candidate'],
             d['sdpMid'],
             d['sdpMLineIndex'],
@@ -192,6 +228,7 @@ class SignalingService {
 
       final offer = RTCSessionDescription(data['sdp'], data['type']);
       await _pc!.setRemoteDescription(offer);
+      _onRemoteDescriptionSet();
 
       // Create answer
       final answer = await _pc!.createAnswer();
@@ -210,7 +247,7 @@ class SignalingService {
       for (final change in snap.docChanges) {
         if (change.type == DocumentChangeType.added) {
           final d = change.doc.data() as Map<String, dynamic>;
-          _pc!.addCandidate(RTCIceCandidate(
+          _addIceCandidate(RTCIceCandidate(
             d['candidate'],
             d['sdpMid'],
             d['sdpMLineIndex'],

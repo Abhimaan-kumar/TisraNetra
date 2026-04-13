@@ -118,16 +118,27 @@ class FcmService {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final ctx = navigatorKey.currentContext;
+
     final docRef =
         FirebaseFirestore.instance.collection('help_requests').doc(requestId);
 
-    // Use a transaction so only the first volunteer wins
     try {
+      if (ctx != null) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(content: Text('Accepting request...')),
+        );
+      }
+
       await FirebaseFirestore.instance.runTransaction((txn) async {
         final snap = await txn.get(docRef);
-        if (!snap.exists) return;
+        if (!snap.exists) {
+          throw Exception('Request no longer exists.');
+        }
         final status = snap.data()?['status'] as String?;
-        if (status != 'pending') return; // already taken
+        if (status != 'pending') {
+          throw Exception('Request was already taken or cancelled.');
+        }
 
         txn.update(docRef, {
           'status': 'accepted',
@@ -138,19 +149,27 @@ class FcmService {
 
       debugPrint('[FCM] Accepted help request $requestId');
 
-      // Navigate to the video call screen as a volunteer
-      // We import lazily via the navigator key to avoid circular deps.
       final nav = navigatorKey.currentState;
       if (nav != null) {
-        // Dynamically push the video call screen.
-        // We pass role = 'volunteer' and the requestId.
         nav.pushNamed(
           '/video_call',
           arguments: {'role': 'volunteer', 'requestId': requestId},
         );
+      } else {
+        debugPrint('[FCM] CRITICAL: Navigator state is null');
+        if (ctx != null) {
+          ScaffoldMessenger.of(ctx).showSnackBar(
+            const SnackBar(content: Text('Error: App navigator is missing')),
+          );
+        }
       }
     } catch (e) {
       debugPrint('[FCM] Error accepting request: $e');
+      if (ctx != null) {
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          SnackBar(content: Text('Failed to accept: $e')),
+        );
+      }
     }
   }
 }
