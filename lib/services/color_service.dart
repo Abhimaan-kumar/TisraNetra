@@ -18,7 +18,7 @@ class ColorResult {
 }
 
 class ColorService {
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY'; // 🔑 your key
+  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY'; 
 
   // ✅ Lite first (higher free quota), flash as fallback
   static const List<String> _models = [

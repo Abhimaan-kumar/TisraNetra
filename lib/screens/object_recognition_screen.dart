@@ -38,7 +38,6 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   int _scanCount = 0;
   int _successCount = 0;
 
-  // ── API key constant — same as in service ──────────────────
   static const _apiKey = 'REDACTED_PRIVATE_API_KEY';
 
   @override
@@ -48,11 +47,10 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
     WidgetsBinding.instance.addObserver(this);
     _initCamera();
     _ttsService.speak(
-    'Object recognition screen. Tap the start button to begin recognizing objects around you.',
-  );
+      'Object recognition screen. Tap the start button to begin recognizing objects around you.',
+    );
   }
 
-  // ── Debug: list models available for your API key ──────────
   Future<void> _debugListModels() async {
     try {
       final res = await http.get(Uri.parse(
@@ -65,14 +63,11 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
         for (final m in models) {
           final name = m['name'];
           final methods = m['supportedGenerationMethods'];
-          if (methods != null &&
-              (methods as List).contains('generateContent')) {
+          if (methods != null && (methods as List).contains('generateContent')) {
             print('$name');
           }
         }
         print('======================================');
-      } else {
-        print('ListModels failed: ${res.statusCode} — ${res.body}');
       }
     } catch (e) {
       print('ListModels error: $e');
@@ -114,7 +109,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   Future<void> _setupCamera(CameraDescription cam) async {
     final ctrl = CameraController(
       cam,
-      ResolutionPreset.low, // small image = fast upload
+      ResolutionPreset.low,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
@@ -186,7 +181,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
 
       if (!mounted) return;
 
-      if (result != null && result.description.isNotEmpty) {
+      if (result != null && result.objects.isNotEmpty) {
         _successCount++;
         final isNew = !result.isSimilarTo(_previousResult);
 
@@ -195,17 +190,20 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
           _lastResult = result;
           _statusMessage = isNew
               ? '✓ Scan #$_scanCount: ${result.objects.length} object(s)'
-              : '↺ Scene unchanged (#$_scanCount)';
+              : '↺ Same scene (#$_scanCount)';
         });
 
         if (isNew || _successCount == 1) {
           setState(() => _isSpeaking = true);
-          await _ttsService.speak(result.description);
+          // Speak only the names
+          await _ttsService.speak(result.spokenText);
           if (mounted) setState(() => _isSpeaking = false);
         }
       } else {
-        setState(() =>
-            _statusMessage = 'Scan #$_scanCount: No result, retrying...');
+        setState(() {
+          _lastResult = null;
+          _statusMessage = 'Scan #$_scanCount: Nothing detected';
+        });
       }
     } catch (e) {
       print('Error: $e');
@@ -233,11 +231,11 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   }
 
   Future<void> _repeatResult() async {
-    if (_lastResult == null) {
+    if (_lastResult == null || _lastResult!.objects.isEmpty) {
       await _ttsService.speak('Nothing detected yet.');
       return;
     }
-    await _ttsService.speak(_lastResult!.description);
+    await _ttsService.speak(_lastResult!.spokenText);
   }
 
   @override
@@ -249,7 +247,8 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
         children: [
           Expanded(flex: 3, child: _cameraView()),
           _statusBar(),
-          if (_lastResult != null) _resultPanel(),
+          if (_lastResult != null && _lastResult!.objects.isNotEmpty)
+            _objectChips(),
           _controls(),
         ],
       ),
@@ -290,22 +289,39 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
         ],
       );
 
+  // ── Camera view with bounding boxes ──────────────────────────────────────
+
   Widget _cameraView() {
     if (!_isCameraReady || _cameraController == null) {
       return const Center(
-          child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          CircularProgressIndicator(color: Colors.white),
-          SizedBox(height: 12),
-          Text('Initializing camera...',
-              style: TextStyle(color: Colors.white70)),
-        ],
-      ));
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 12),
+            Text('Initializing camera...',
+                style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      );
     }
+
     return Stack(fit: StackFit.expand, children: [
+      // Camera preview
       CameraPreview(_cameraController!),
+
+      // Bounding boxes + labels painted on top
+      if (_lastResult != null && _lastResult!.objects.isNotEmpty)
+        Positioned.fill(
+          child: CustomPaint(
+            painter: _BoundingBoxPainter(objects: _lastResult!.objects),
+          ),
+        ),
+
+      // Pulsing scan border when scanning
       if (_isScanning) _ScanBorder(),
+
+      // Analyzing indicator
       if (_isRecognizing)
         Positioned(
           bottom: 14,
@@ -313,119 +329,101 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
           right: 0,
           child: Center(
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.7),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                      color: Colors.cyanAccent.withOpacity(0.5))),
+                color: Colors.black.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.cyanAccent.withOpacity(0.5)),
+              ),
               child: const Row(mainAxisSize: MainAxisSize.min, children: [
                 SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(
-                        color: Colors.cyanAccent, strokeWidth: 2)),
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                      color: Colors.cyanAccent, strokeWidth: 2),
+                ),
                 SizedBox(width: 8),
-                Text('Recognizing...',
-                    style: TextStyle(color: Colors.white, fontSize: 13)),
+                Text('Analyzing...', style: TextStyle(color: Colors.white, fontSize: 13)),
               ]),
             ),
           ),
         ),
-      if (_lastResult != null)
-        Positioned(
-          top: 12,
-          left: 12,
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                    color: Colors.cyanAccent.withOpacity(0.5))),
-            child: Text(_lastResult!.objects.take(3).join(', '),
-                style:
-                    const TextStyle(color: Colors.white, fontSize: 11)),
-          ),
-        ),
+
+      // Speaking badge
       if (_isSpeaking)
         Positioned(
           top: 12,
           right: 12,
           child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.85),
-                borderRadius: BorderRadius.circular(20)),
+              color: Colors.blue.withOpacity(0.85),
+              borderRadius: BorderRadius.circular(20),
+            ),
             child: const Row(mainAxisSize: MainAxisSize.min, children: [
               Icon(Icons.volume_up, color: Colors.white, size: 12),
               SizedBox(width: 4),
-              Text('Speaking',
-                  style: TextStyle(color: Colors.white, fontSize: 11)),
+              Text('Speaking', style: TextStyle(color: Colors.white, fontSize: 11)),
             ]),
           ),
         ),
     ]);
   }
 
+  // ── Status bar ────────────────────────────────────────────────────────────
+
   Widget _statusBar() => Container(
         width: double.infinity,
         color: Colors.grey[900],
-        padding:
-            const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
         child: Row(children: [
           if (_isScanning) _PulseDot(color: Colors.cyanAccent),
           const SizedBox(width: 8),
           Expanded(
-              child: Text(_statusMessage,
-                  style: TextStyle(
-                      color:
-                          _isScanning ? Colors.cyanAccent : Colors.white60,
-                      fontSize: 12))),
-        ]),
-      );
-
-  Widget _resultPanel() {
-    final r = _lastResult!;
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 110),
-      color: Colors.grey[850],
-      padding: const EdgeInsets.all(12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(r.description,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 14, height: 1.4),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis),
-        if (r.objects.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          SizedBox(
-            height: 28,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: r.objects.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 6),
-              itemBuilder: (_, i) => Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                    color: Colors.cyanAccent.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                        color: Colors.cyanAccent.withOpacity(0.4))),
-                child: Text(r.objects[i],
-                    style: const TextStyle(
-                        color: Colors.cyanAccent, fontSize: 11)),
+            child: Text(
+              _statusMessage,
+              style: TextStyle(
+                color: _isScanning ? Colors.cyanAccent : Colors.white60,
+                fontSize: 12,
               ),
             ),
           ),
-        ]
-      ]),
+        ]),
+      );
+
+  // ── Object name chips ─────────────────────────────────────────────────────
+
+  Widget _objectChips() {
+    final objects = _lastResult!.objects;
+    return Container(
+      height: 52,
+      color: Colors.grey[850],
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: objects.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.cyanAccent.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.cyanAccent.withOpacity(0.5)),
+          ),
+          child: Text(
+            objects[i].name,
+            style: const TextStyle(
+              color: Colors.cyanAccent,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
     );
   }
+
+  // ── Controls ──────────────────────────────────────────────────────────────
 
   Widget _controls() => Container(
         color: Colors.black,
@@ -436,20 +434,24 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
             child: ElevatedButton.icon(
               onPressed: _isCameraReady ? _toggleScanning : null,
               icon: Icon(
-                  _isScanning
-                      ? Icons.pause_circle_outline
-                      : Icons.play_circle_outline,
-                  size: 26),
-              label: Text(_isScanning ? 'Pause' : 'Resume',
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w600)),
+                _isScanning
+                    ? Icons.pause_circle_outline
+                    : Icons.play_circle_outline,
+                size: 26,
+              ),
+              label: Text(
+                _isScanning ? 'Pause' : 'Resume',
+                style:
+                    const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+              ),
               style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      _isScanning ? Colors.orange : Colors.cyanAccent,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14))),
+                backgroundColor:
+                    _isScanning ? Colors.orange : Colors.cyanAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -457,21 +459,119 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
             child: ElevatedButton.icon(
               onPressed: _repeatResult,
               icon: const Icon(Icons.replay, size: 22),
-              label: const Text('Repeat',
-                  style: TextStyle(fontSize: 15)),
+              label: const Text('Repeat', style: TextStyle(fontSize: 15)),
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.grey[800],
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14))),
+                backgroundColor: Colors.grey[800],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
             ),
           ),
         ]),
       );
 }
 
-// ── Animated helpers ───────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// Custom painter — draws colored bounding boxes + name labels
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _BoundingBoxPainter extends CustomPainter {
+  final List<DetectedObject> objects;
+
+  // Distinct colors per box
+  static const _colors = [
+    Colors.cyanAccent,
+    Colors.yellowAccent,
+    Colors.greenAccent,
+    Colors.orangeAccent,
+    Colors.pinkAccent,
+    Colors.lightBlueAccent,
+    Colors.purpleAccent,
+    Colors.tealAccent,
+  ];
+
+  const _BoundingBoxPainter({required this.objects});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (int i = 0; i < objects.length; i++) {
+      final obj = objects[i];
+      final color = _colors[i % _colors.length];
+
+      // Convert normalized coords to pixel coords
+      final rect = Rect.fromLTWH(
+        obj.left * size.width,
+        obj.top * size.height,
+        obj.width * size.width,
+        obj.height * size.height,
+      );
+
+      // Draw box
+      final boxPaint = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5;
+      canvas.drawRect(rect, boxPaint);
+
+      // Draw corner accents (makes it look like a real detection box)
+      _drawCorners(canvas, rect, color);
+
+      // Draw label background
+      final labelText = obj.name;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '  $labelText  ',
+          style: TextStyle(
+            color: Colors.black,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            background: Paint()..color = color,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      // Position label above the box (or inside top if no space)
+      final labelTop = rect.top > tp.height + 4
+          ? rect.top - tp.height - 4
+          : rect.top + 4;
+
+      tp.paint(canvas, Offset(rect.left, labelTop));
+    }
+  }
+
+  void _drawCorners(Canvas canvas, Rect rect, Color color) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0
+      ..strokeCap = StrokeCap.round;
+
+    const len = 18.0;
+
+    // Top-left
+    canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(len, 0), paint);
+    canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(0, len), paint);
+    // Top-right
+    canvas.drawLine(rect.topRight, rect.topRight + const Offset(-len, 0), paint);
+    canvas.drawLine(rect.topRight, rect.topRight + const Offset(0, len), paint);
+    // Bottom-left
+    canvas.drawLine(rect.bottomLeft, rect.bottomLeft + const Offset(len, 0), paint);
+    canvas.drawLine(rect.bottomLeft, rect.bottomLeft + const Offset(0, -len), paint);
+    // Bottom-right
+    canvas.drawLine(rect.bottomRight, rect.bottomRight + const Offset(-len, 0), paint);
+    canvas.drawLine(rect.bottomRight, rect.bottomRight + const Offset(0, -len), paint);
+  }
+
+  @override
+  bool shouldRepaint(_BoundingBoxPainter old) => old.objects != objects;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Animated helpers
+// ═════════════════════════════════════════════════════════════════════════════
 
 class _ScanBorder extends StatefulWidget {
   @override
@@ -487,10 +587,7 @@ class _ScanBorderState extends State<_ScanBorder>
       Tween<double>(begin: 0.3, end: 1.0).animate(_c);
 
   @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
+  void dispose() { _c.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -505,6 +602,7 @@ class _ScanBorderState extends State<_ScanBorder>
 class _PulseDot extends StatefulWidget {
   final Color color;
   const _PulseDot({required this.color});
+
   @override
   State<_PulseDot> createState() => _PulseDotState();
 }
@@ -516,10 +614,7 @@ class _PulseDotState extends State<_PulseDot>
     ..repeat(reverse: true);
 
   @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
+  void dispose() { _c.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -529,6 +624,5 @@ class _PulseDotState extends State<_PulseDot>
           height: 10,
           decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color:
-                  widget.color.withOpacity(0.4 + 0.6 * _c.value))));
+              color: widget.color.withOpacity(0.4 + 0.6 * _c.value))));
 }

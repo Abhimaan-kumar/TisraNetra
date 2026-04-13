@@ -54,4 +54,5 @@ flutter {
 
 dependencies {
     implementation("androidx.multidex:multidex:2.0.1")
+    implementation("com.google.mlkit:text-recognition-devanagari:16.0.1")
 }
