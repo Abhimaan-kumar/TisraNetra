@@ -279,7 +279,7 @@ class _HomeScreenState extends State<HomeScreen> {
               errorBuilder: (ctx, obj, stack) => const SizedBox.shrink(),
             ),
             const SizedBox(width: 8),
-            Text(widget.title),
+            Text("Life Lens", style: Theme.of(context).textTheme.headlineSmall),
           ],
         ),
         actions: [
@@ -314,10 +314,8 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(30.0),
         child: Column(
           children: [
-            const Text(
-              'Welcome User!',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
+            Text(
+             "Welcome ${widget.title}"),
             const SizedBox(height: 8),
             Text(
               _listening ? 'Listening...' : 'Press Volume Up to start',

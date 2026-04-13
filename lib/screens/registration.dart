@@ -54,16 +54,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         const SnackBar(content: Text("Account Created Successfully")),
       );
 
-      // Navigate based on userType
-      if (userType == 'Client') {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Life Lens")),
         );
-      } else {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const VolunteerScreen()),
-        );
-      }
+       
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error: $e")),

@@ -46,22 +46,23 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     if (user == null) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+        MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Life Lens")),
       );
       return;
     }
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final userType = doc.data()?['userType'] as String?;
+      final name = doc.data()?['name'] as String?;
       if (userType != null && userType.toLowerCase() == 'volunteer') {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const VolunteerScreen()),
+          MaterialPageRoute(builder: (_) => HomeScreen(title: " $userType")),
         );
       } else {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+          MaterialPageRoute(builder: (_) => HomeScreen(title: " $name")),
         );
       }
     } catch (e) {
