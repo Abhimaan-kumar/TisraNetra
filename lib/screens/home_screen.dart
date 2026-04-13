@@ -5,7 +5,6 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'profile_screen.dart';
-import 'volunteer.dart';
 import '../widgets/menu_option.dart';
 import '../widgets/menu_card.dart';
 import 'read_anything_screen.dart';
@@ -62,27 +61,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _setupVolumeButtonListener();
     _welcome();
-    _redirectIfVolunteer();
-  }
-
-  Future<void> _redirectIfVolunteer() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-      final userType = doc.data()?['userType'] as String?;
-      if (userType != null && userType.toLowerCase() == 'volunteer') {
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const VolunteerScreen()),
-          );
-        }
-      }
-    } catch (_) {}
   }
 
   void _setupVolumeButtonListener() {
@@ -99,18 +77,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _handleRawKey(RawKeyEvent event) {
-    // Fallback for web/desktop
-    if (event is RawKeyDownEvent) {
-      if (event.logicalKey == LogicalKeyboardKey.audioVolumeUp) {
-        _speak('Listening...');
-        _startListeningFor5Seconds();
-      } else if (event.logicalKey == LogicalKeyboardKey.audioVolumeDown) {
-        _stopListening();
-        _speak('Listening stopped.');
-      }
-    }
-  }
 
   Future<void> _welcome() async {
     await _speak('Welcome to LifeLens. Press volume up to give a command.');

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'login.dart'; // added import
 import 'home_screen.dart'; // added
+import '../services/fcm_service.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -49,22 +50,36 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         'createdAt': Timestamp.now(),
       });
 
+      // Save FCM token for push notifications (if it fails, still proceed with registration)
+      try {
+        await FcmService().saveTokenForCurrentUser();
+      } catch (e) {
+        debugPrint('FCM save token ignored during registration: $e');
+      }
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Account Created Successfully")),
       );
 
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Life Lens")),
-        );
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Life Lens")),
+      );
        
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Auth Error: ${e.message}")),
+      );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error: $e")),
       );
     }
 
-    setState(() => isLoading = false);
+    if (mounted) setState(() => isLoading = false);
   }
 
   @override
