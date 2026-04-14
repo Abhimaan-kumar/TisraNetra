@@ -38,6 +38,7 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   'note'         : ('Currency',               () => const CurrencyScreen()),
   'money'        : ('Currency',               () => const CurrencyScreen()),
   'paise'        : ('Currency',               () => const CurrencyScreen()),
+  'rupeyya'     : ('Currency',               () => const CurrencyScreen()),
 
   // Navigate
   'navigate'     : ('Navigate',               () => const NavigateScreen()),
@@ -45,6 +46,7 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   'direction'    : ('Navigate',               () => const NavigateScreen()),
   'rasta'        : ('Navigate',               () => const NavigateScreen()),
   'raasta'       : ('Navigate',               () => const NavigateScreen()),
+  'jana hai'     : ('Navigate',               () => const NavigateScreen()),
 
   // Object Recognition
   'object'       : ('Object Recognition',     () => const ObjectRecognitionScreen()),
@@ -58,8 +60,8 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   'caption'      : ('Scene Captioning',       () => const SceneCaptioningScreen()),
   'describe'     : ('Scene Captioning',       () => const SceneCaptioningScreen()),
   'description'  : ('Scene Captioning',       () => const SceneCaptioningScreen()),
-  'batao'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
   'samne'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'kya ho rha hai': ('Scene Captioning',       () => const SceneCaptioningScreen()),
 
   // Person Identification
   'person'       : ('Person Identification',  () => const PersonIdentificationScreen()),
@@ -70,6 +72,7 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   'pehchano'     : ('Person Identification',  () => const PersonIdentificationScreen()),
   'aadmi kaun hai': ('Person Identification',  () => const PersonIdentificationScreen()),
   'aurat kaun hai': ('Person Identification',  () => const PersonIdentificationScreen()),
+  
   // Color
   'color'        : ('Color',                  () => const ColorScreen()),
   'colour'       : ('Color',                  () => const ColorScreen()),
@@ -80,12 +83,10 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   'talk'         : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
   'voluntary'    : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
   'volunteer'    : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
-  'help'         : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
   'madad'        : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
   'sahayata'     : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
 
   // AI Buddy
-  'ai'           : ('AI Buddy',               () => const AIBuddyScreen()),
   'buddy'        : ('AI Buddy',               () => const AIBuddyScreen()),
   'chat'         : ('AI Buddy',               () => const AIBuddyScreen()),
   'baat'         : ('AI Buddy',               () => const AIBuddyScreen()),
@@ -94,7 +95,7 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   // Emergency
   'emergency'    : ('Emergency',              () => const EmergencyScreen()),
   'bachao'       : ('Emergency',              () => const EmergencyScreen()),
-  'help me'      : ('Emergency',              () => const EmergencyScreen()),
+  'call'      : ('Emergency',              () => const EmergencyScreen()),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,7 +121,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _initStt();
     _setupVolume();
     _welcome();
-    _redirectIfVolunteer();
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────────
@@ -152,22 +152,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _tts.speak(
       'Welcome to LifeLens. Press volume up and say a feature name to open it.',
     );
-  }
-
-  Future<void> _redirectIfVolunteer() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users').doc(user.uid).get();
-      if ((doc.data()?['userType'] as String? ?? '').toLowerCase() ==
-          'volunteer') {
-        if (mounted) {
-          Navigator.pushReplacement(context,
-              MaterialPageRoute(builder: (_) => const VolunteerScreen()));
-        }
-      }
-    } catch (_) {}
   }
 
   // ── Volume up ─────────────────────────────────────────────────────────────────
@@ -204,9 +188,11 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       listenFor: const Duration(seconds: 8),
       pauseFor: const Duration(seconds: 3),
-      partialResults: false,
-      cancelOnError: true,
-      listenMode: stt.ListenMode.confirmation,
+      listenOptions: stt.SpeechListenOptions(
+        partialResults: false,
+        cancelOnError: true,
+        listenMode: stt.ListenMode.confirmation,
+      ),
     );
   }
 

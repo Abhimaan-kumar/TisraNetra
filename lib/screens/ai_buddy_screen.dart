@@ -31,6 +31,7 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
   final FocusNode _focusNode = FocusNode();
   bool _loading = false;
   bool _listening = false;
+  bool _isSpeaking = false;
   String _recognizedText = '';
 
   @override

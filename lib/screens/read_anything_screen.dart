@@ -123,8 +123,8 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen>
       _scanAgain();
       await _ttsService.speak(isHindi ? 'फिर से स्कैन कर रहा हूँ।' : 'Scanning again.');
     } else if (isRepeat) {
-      _repeatText();
       await _ttsService.speak(isHindi ? 'दोबारा पढ़ रहा हूँ।' : 'Repeating.');
+      await _repeatText();
     } else {
       await _ttsService.speak(isHindi
           ? 'कमांड समझ नहीं आई। "दोबारा पढ़ो" या "स्कैन करो" बोलें।'
@@ -212,9 +212,9 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen>
     }
   }
 
-  void _repeatText() {
-    if (_segments.isEmpty) { _ttsService.speak('Nothing read yet.'); return; }
-    _ttsService.speakSegments(_segments);
+  Future<void> _repeatText() async {
+    if (_segments.isEmpty) { await _ttsService.speak('Nothing read yet.'); return; }
+    await _ttsService.speakSegments(_segments);
   }
 
   void _scanAgain() {

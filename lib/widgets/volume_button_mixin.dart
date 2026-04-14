@@ -87,6 +87,8 @@ mixin VolumeButtonMixin<T extends StatefulWidget> on State<T> {
     // Start listening
     await _mixinTts.stop();
     if (mounted) setState(() => _mixinListening = true);
+    await _mixinTts.speak('Listening');
+    await Future.delayed(const Duration(milliseconds: 600)); // wait for TTS to start/finish
 
     await _mixinStt.listen(
       onResult: (result) async {
@@ -104,9 +106,11 @@ mixin VolumeButtonMixin<T extends StatefulWidget> on State<T> {
       },
       listenFor: const Duration(seconds: 7),
       pauseFor: const Duration(seconds: 2),
-      partialResults: false,
-      cancelOnError: true,
-      listenMode: stt.ListenMode.confirmation,
+      listenOptions: stt.SpeechListenOptions(
+        partialResults: false,
+        cancelOnError: true,
+        listenMode: stt.ListenMode.confirmation,
+      ),
     );
   }
 

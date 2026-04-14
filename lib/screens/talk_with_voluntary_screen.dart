@@ -59,7 +59,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
       FirebaseFirestore.instance.collection('help_requests');
 
   // ──────── create a help request in Firestore ───────────
-  Future<void> _requestHelp() async {
+  Future<void> _createHelpRequest() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       // Must be logged in
@@ -172,7 +172,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.phone),
                   label: Text(_creatingRequest ? 'Requesting help...' : 'Call a Volunteer'),
-                  onPressed: _creatingRequest ? null : _requestHelp,
+                  onPressed: _creatingRequest ? null : _createHelpRequest,
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     backgroundColor: const Color.fromARGB(255, 142, 73, 37),
