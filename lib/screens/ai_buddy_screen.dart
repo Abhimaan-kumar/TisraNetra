@@ -60,11 +60,59 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
     });
   }
 
+
   void _initializeGemini() {
-    const String apiKey = 'REDACTED_PRIVATE_API_KEY';
-    _model = GenerativeModel(model: 'gemini-3-flash-preview', apiKey: apiKey);
-    _chatSession = _model.startChat();
-  }
+  const String apiKey = 'REDACTED_PRIVATE_API_KEY';
+
+  const String systemPrompt = '''
+You are a helpful personal buddy named Life Lens that will be used by blinds people.
+
+Your personality:
+- Friendly and concise
+- no any text editing, no bold, no italic, no underline, no bullet points, no numbered list, no emojis, no special characters, no markdown formatting
+- You speak in a warm but efficient tone
+- You remember context within the conversation
+
+Your capabilities:
+- Answer questions clearly and accurately
+- If you don't know something, say so honestly
+
+Rules:
+- Always respond in the same language the user writes in
+- If user say in hindi, make sure you give response in hindi text
+- If user asks for location, provide the location
+- Keep responses concise unless the user asks for detail
+- Never make up facts or hallucinate information
+- 
+''';
+
+  _model = GenerativeModel(
+    model: 'gemini-3-flash-preview',
+    apiKey: apiKey,
+    // ✅ System instruction for global persona/behavior
+    systemInstruction: Content.system(systemPrompt),
+    // ✅ Optional: tune generation behavior
+    generationConfig: GenerationConfig(
+      temperature: 0.7,       // 0.0 = deterministic, 1.0 = creative
+      maxOutputTokens: 1024,
+      topP: 0.9,
+    ),
+    // ✅ Optional: add safety settings
+    safetySettings: [
+      SafetySetting(HarmCategory.harassment, HarmBlockThreshold.medium),
+      SafetySetting(HarmCategory.hateSpeech, HarmBlockThreshold.medium),
+    ],
+  );
+
+  // ✅ Optional: seed the chat with a pre-conversation for extra context
+  _chatSession = _model.startChat(
+    history: [
+      Content.model([
+        TextPart("Hello! I'm Life Lens, your personal assistant. How can I help you today?")
+      ]),
+    ],
+  );
+}
 
   void _initializeTTS() {
     _tts = FlutterTts();
