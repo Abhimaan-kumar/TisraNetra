@@ -1,461 +1,233 @@
+// lib/screens/currency_screen.dart
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:speech_to_text/speech_to_text.dart';
-import '../../services/currency_service.dart';
-import '../../services/tts_service.dart';
+import '../services/currency_service.dart';
+import '../services/tts_service.dart';
+import '../widgets/volume_button_mixin.dart';
 
 class CurrencyScreen extends StatefulWidget {
   const CurrencyScreen({super.key});
-
-  @override
-  State<CurrencyScreen> createState() => _CurrencyScreenState();
+  @override State<CurrencyScreen> createState() => _CurrencyScreenState();
 }
 
 class _CurrencyScreenState extends State<CurrencyScreen>
-    with WidgetsBindingObserver {
-  CameraController? _cameraController;
-  final CurrencyService _currencyService = CurrencyService();
-  final TtsService _ttsService = TtsService();
-  final SpeechToText _speechToText = SpeechToText();
+    with WidgetsBindingObserver, VolumeButtonMixin {
+
+  CameraController? _cam;
+  final CurrencyService _svc   = CurrencyService();
+  final TtsService      _tts   = TtsService();
 
   List<CameraDescription> _cameras = [];
-  CurrencyDetectionResult? _lastResult;
+  CurrencyDetectionResult? _last;
 
-  bool _isDetecting = false;
-  bool _isCameraReady = false;
-  bool _isScanning = false;
-  String _statusMessage = 'Tap the button to start scanning';
-
-  Timer? _scanTimer;
+  bool _detecting  = false;
+  bool _camReady   = false;
+  bool _scanning   = false;
+  String _status   = 'Starting camera…';
+  Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initSpeech();
-    _initCamera().then((_) {
-      if (_isCameraReady) {
-        _startScanning();
-      }
-    });
-    _ttsService.speak(
-      'Currency detection screen opened. Scanning will start automatically.',
-    );
+    initVolumeButtonListener();
+    _initCamera().then((_) { if (_camReady) _startScan(); });
+    _tts.speak('Currency detection screen. Scanning will start automatically.');
   }
 
-  Future<void> _initCamera() async {
-    try {
-      _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        setState(() => _statusMessage = 'No camera found');
-        return;
-      }
-      await _startCamera(_cameras.first);
-    } catch (e) {
-      setState(() => _statusMessage = 'Camera error: $e');
-    }
+  @override void didChangeAppLifecycleState(AppLifecycleState s) {
+    if (s == AppLifecycleState.inactive) { _cam?.dispose(); }
+    else if (s == AppLifecycleState.resumed) { _startCamera(_cameras.first); }
   }
-
-  Future<void> _initSpeech() async {
-    await _speechToText.initialize();
-  }
-
-  Future<void> _startCamera(CameraDescription camera) async {
-    final controller = CameraController(
-      camera,
-      ResolutionPreset.high, // Changed from medium → high
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.jpeg,
-    );
-
-    try {
-      await controller.initialize();
-      await controller.setFocusMode(FocusMode.auto);
-      await controller.setExposureMode(ExposureMode.auto);
-      await controller.setFlashMode(FlashMode.off);
-
-      if (!mounted) return;
-      setState(() {
-        _cameraController = controller;
-        _isCameraReady = true;
-      });
-    } catch (e) {
-      setState(() => _statusMessage = 'Camera init failed: $e');
-    }
-  }
-
-  void _startScanning() {
-    if (_isScanning) {
-      _stopScanning();
-      return;
-    }
-
-    setState(() {
-      _isScanning = true;
-      _statusMessage = 'Scanning... Hold camera over currency notes';
-    });
-
-    _ttsService.speak(
-      'Scanning started. Hold the camera over the currency notes.',
-    );
-
-    // Auto-scan every 4 seconds
-    _scanTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (_isScanning && !_isDetecting) {
-        _captureAndDetect();
-      }
-    });
-
-    // First scan immediately
-    _captureAndDetect();
-  }
-
-  void _stopScanning() {
-    _scanTimer?.cancel();
-    setState(() {
-      _isScanning = false;
-      _statusMessage = 'Scanning stopped. Tap to scan again.';
-    });
-    _ttsService.speak('Scanning stopped.');
-  }
-
-  Future<void> _captureAndDetect() async {
-    if (_isDetecting || _cameraController == null || !_isCameraReady) return;
-
-    setState(() {
-      _isDetecting = true;
-      _statusMessage = 'Analyzing image...';
-    });
-
-    try {
-      await _cameraController!.setFocusMode(FocusMode.auto);
-      await Future.delayed(
-        const Duration(milliseconds: 600),
-      ); // Let focus settle
-
-      final XFile photo = await _cameraController!.takePicture();
-      final Uint8List imageBytes = await photo.readAsBytes();
-
-      print('Image size: ${imageBytes.length} bytes'); // Should be > 100KB
-
-      if (imageBytes.length < 50000) {
-        setState(() => _statusMessage = 'Image too small, retrying...');
-        setState(() => _isDetecting = false);
-        return;
-      }
-
-      final result = await _currencyService.detectCurrency(imageBytes);
-
-      if (!mounted) return;
-
-      if (result != null && result.detectedNotes.isNotEmpty) {
-        setState(() {
-          _lastResult = result;
-          _statusMessage = 'Detection complete!';
-        });
-
-        final notesList = result.detectedNotes.map((n) => '₹$n').join(', ');
-        final speech =
-            'Detected ${result.detectedNotes.length} notes: $notesList. '
-            'Total is ${result.totalAmount} rupees.';
-        await _ttsService.speak(speech);
-      } else {
-        final rawMsg = result?.rawResponse ?? 'null result';
-        print('No notes detected. Raw response: $rawMsg');
-
-        setState(
-          () =>
-              _statusMessage = 'No notes found. Keep camera steady and retry.',
-        );
-        await _ttsService.speak(
-          'Could not detect currency. Please hold the camera steadier and ensure notes are well lit.',
-        );
-      }
-    } catch (e) {
-      print('Capture error: $e');
-      setState(() => _statusMessage = 'Error: $e');
-      await _ttsService.speak('An error occurred. Please try again.');
-    } finally {
-      if (mounted) setState(() => _isDetecting = false);
-    }
-  }
-
-  Future<void> _speakResult() async {
-    if (_lastResult == null) {
-      await _ttsService.speak('No result yet. Please scan currency first.');
-      return;
-    }
-    final speech =
-        'Total amount is ${_lastResult!.totalAmount} rupees. '
-        'Notes detected: ${_lastResult!.detectedNotes.map((n) => "₹$n").join(", ")}.';
-    await _ttsService.speak(speech);
-  }
-
-  void _clearResult() {
-    setState(() {
-      _lastResult = null;
-      _statusMessage = 'Cleared. Tap scan to start again.';
-    });
-    _ttsService.speak('Results cleared.');
-  }
-
-  void _restart() {
-    _clearResult();
-    _startScanning();
-    _ttsService.speak('Restarting scan.');
-  }
-
-  Future<void> _startListeningForRestart() async {
-    if (_speechToText.isListening) return;
-    await _speechToText.listen(
-      onResult: (result) {
-        if (result.recognizedWords.toLowerCase().contains('restart')) {
-          _restart();
-          _speechToText.stop();
-        }
-      },
-    );
-    _ttsService.speak('Listening for restart command.');
-  }
-
-  void _handleKey(RawKeyEvent event) {
-    if (event is RawKeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.audioVolumeUp) {
-      _startListeningForRestart();
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (_cameraController == null) return;
-    if (state == AppLifecycleState.inactive) {
-      _cameraController?.dispose();
-    } else if (state == AppLifecycleState.resumed) {
-      _startCamera(_cameras.first);
-    }
-  }
-
-  @override
-  void dispose() {
+  @override void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _scanTimer?.cancel();
-    _cameraController?.dispose();
-    _speechToText.stop();
-    _ttsService.dispose();
+    _timer?.cancel(); _cam?.dispose(); _tts.dispose();
     super.dispose();
   }
 
+  // ── VolumeButtonMixin ────────────────────────────────────────────────────
+  @override Future<void> onVolumeUp() async => _restart();
+
+  @override Future<void> handleFeatureVoiceCommand(String cmd, String lang) async {
+    final hi = lang == 'hi';
+    final isRepeat  = cmd.contains('repeat') || cmd.contains('phir')   || cmd.contains('dobara');
+    final isScan    = cmd.contains('scan')   || cmd.contains('again')  || cmd.contains('restart') ||
+                      cmd.contains('dubara') || cmd.contains('kro');
+    final isStop    = cmd.contains('stop')   || cmd.contains('ruko')   || cmd.contains('band');
+    if (isStop)    { _stopScan();  await _tts.speak(hi ? 'रुक गया।' : 'Stopped.'); }
+    else if (isScan)   { _restart();  await _tts.speak(hi ? 'फिर से स्कैन कर रहा हूँ।' : 'Scanning again.'); }
+    else if (isRepeat) { _speak();    await _tts.speak(hi ? '' : ''); }
+    else { await _tts.speak(hi ? 'कमांड समझ नहीं आई।' : 'Command not understood. Say scan again or repeat.'); }
+  }
+
+  // ── Camera ───────────────────────────────────────────────────────────────
+  Future<void> _initCamera() async {
+    try {
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) { setState(() => _status = 'No camera'); return; }
+      await _startCamera(_cameras.first);
+    } catch (e) { setState(() => _status = 'Camera error: $e'); }
+  }
+
+  Future<void> _startCamera(CameraDescription cam) async {
+    final ctrl = CameraController(cam, ResolutionPreset.high,
+        enableAudio: false, imageFormatGroup: ImageFormatGroup.jpeg);
+    try {
+      await ctrl.initialize();
+      await ctrl.setFocusMode(FocusMode.auto);
+      await ctrl.setExposureMode(ExposureMode.auto);
+      await ctrl.setFlashMode(FlashMode.off);
+      if (!mounted) return;
+      setState(() { _cam = ctrl; _camReady = true; });
+    } catch (e) { setState(() => _status = 'Camera failed: $e'); }
+  }
+
+  void _startScan() {
+    if (_scanning) { _stopScan(); return; }
+    setState(() { _scanning = true; _status = 'Scanning… hold camera over currency'; });
+    _tts.speak('Scanning started. Hold camera over currency notes.');
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (_scanning && !_detecting) _capture();
+    });
+    _capture();
+  }
+
+  void _stopScan() {
+    _timer?.cancel();
+    setState(() { _scanning = false; _status = 'Stopped. Tap to scan again.'; });
+  }
+
+  Future<void> _capture() async {
+    if (_detecting || _cam == null || !_camReady) return;
+    setState(() { _detecting = true; _status = 'Analyzing…'; });
+    try {
+      await _cam!.setFocusMode(FocusMode.auto);
+      await Future.delayed(const Duration(milliseconds: 600));
+      final photo = await _cam!.takePicture();
+      final bytes = await photo.readAsBytes();
+      if (bytes.length < 50000) {
+        setState(() { _detecting = false; _status = 'Image too small, retrying…'; });
+        return;
+      }
+      final result = await _svc.detectCurrency(bytes);
+      if (!mounted) return;
+      if (result != null && result.detectedNotes.isNotEmpty) {
+        setState(() { _last = result; _status = 'Detection complete!'; });
+        final notes = result.detectedNotes.map((n) => '₹$n').join(', ');
+        await _tts.speak('Detected ${result.detectedNotes.length} notes: $notes. '
+            'Total is ${result.totalAmount} rupees.');
+      } else {
+        setState(() => _status = 'No notes found. Keep camera steady.');
+        await _tts.speak('Could not detect currency. Ensure notes are well lit.');
+      }
+    } catch (e) {
+      setState(() => _status = 'Error: $e');
+      await _tts.speak('An error occurred. Please try again.');
+    } finally {
+      if (mounted) setState(() => _detecting = false);
+    }
+  }
+
+  void _speak() {
+    if (_last == null) { _tts.speak('No result yet. Please scan currency first.'); return; }
+    _tts.speak('Total amount is ${_last!.totalAmount} rupees. '
+        'Notes: ${_last!.detectedNotes.map((n) => "₹$n").join(", ")}.');
+  }
+
+  void _restart() { _last = null; _startScan(); }
+
   @override
   Widget build(BuildContext context) {
-    return RawKeyboardListener(
-      focusNode: FocusNode()..requestFocus(),
-      onKey: _handleKey,
-      child: Scaffold(
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
         backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          title: const Text(
-            'Currency Detection',
-            style: TextStyle(color: Colors.white, fontSize: 20),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () {
-              _ttsService.speak('Going back');
-              Navigator.pop(context);
-            },
-            tooltip: 'Go back',
-          ),
-          actions: [
-            if (_lastResult != null)
-              IconButton(
-                icon: const Icon(Icons.volume_up, color: Colors.white),
-                onPressed: _speakResult,
-                tooltip: 'Repeat total',
-              ),
-          ],
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Currency Detection', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+          Text(isMixinListening ? '🎤 Listening…' : 'Vol↑ = scan again  Vol↓ = home',
+              style: const TextStyle(color: Colors.white54, fontSize: 11)),
+        ]),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () { _tts.speak('Going back'); Navigator.pop(context); },
         ),
-        body: Column(
-          children: [
-            // Camera Preview
-            Expanded(flex: 3, child: _buildCameraPreview()),
-
-            // Status Bar
-            Container(
-              width: double.infinity,
-              color: Colors.grey[900],
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-              child: Text(
-                _statusMessage,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _isScanning ? Colors.greenAccent : Colors.white70,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-
-            // Result Panel
-            if (_lastResult != null) _buildResultPanel(),
-
-            // Action Buttons
-            _buildActionButtons(),
-          ],
-        ),
+        actions: [
+          if (_last != null)
+            IconButton(icon: const Icon(Icons.volume_up, color: Colors.white), onPressed: _speak),
+        ],
       ),
+      body: Column(children: [
+        Expanded(flex: 3, child: _buildCamera()),
+        Container(
+          width: double.infinity, color: Colors.grey[900],
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+          child: Text(_status, textAlign: TextAlign.center,
+              style: TextStyle(color: _scanning ? Colors.greenAccent : Colors.white70, fontSize: 14)),
+        ),
+        if (_last != null) _buildResult(),
+        _buildControls(),
+      ]),
     );
   }
 
-  Widget _buildCameraPreview() {
-    if (!_isCameraReady || _cameraController == null) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 16),
-            Text(
-              'Initializing camera...',
-              style: TextStyle(color: Colors.white),
-            ),
-          ],
-        ),
-      );
-    }
+  Widget _buildCamera() {
+    if (!_camReady || _cam == null) return const Center(child: CircularProgressIndicator(color: Colors.white));
+    return Stack(children: [
+      SizedBox.expand(child: CameraPreview(_cam!)),
+      if (_scanning) Container(decoration: BoxDecoration(border: Border.all(color: Colors.greenAccent, width: 3))),
+      if (_detecting) Container(color: Colors.black38,
+          child: const Center(child: CircularProgressIndicator(color: Colors.greenAccent))),
+      if (isMixinListening)
+        Positioned(bottom: 12, left: 0, right: 0,
+          child: Center(child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(color: Colors.black.withOpacity(0.7), borderRadius: BorderRadius.circular(24)),
+            child: const Text('🎤 Listening…', style: TextStyle(color: Colors.white))))),
+    ]);
+  }
 
-    return Stack(
-      children: [
-        SizedBox.expand(child: CameraPreview(_cameraController!)),
+  Widget _buildResult() {
+    final r = _last!;
+    return Container(color: Colors.grey[850], padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          const Text('Total Amount:', style: TextStyle(color: Colors.white70, fontSize: 14)),
+          Text('₹${r.totalAmount}', style: const TextStyle(color: Colors.greenAccent, fontSize: 28, fontWeight: FontWeight.bold)),
+        ]),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, children: r.detectedNotes.map((n) =>
+            Chip(label: Text('₹$n', style: const TextStyle(color: Colors.black)),
+                backgroundColor: Colors.greenAccent)).toList()),
+      ]));
+  }
 
-        // Scanning overlay
-        if (_isScanning)
-          Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.greenAccent, width: 3),
-            ),
-          ),
-
-        // Processing indicator
-        if (_isDetecting)
-          Container(
-            color: Colors.black38,
-            child: const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(color: Colors.greenAccent),
-                  SizedBox(height: 12),
-                  Text(
-                    'Analyzing...',
-                    style: TextStyle(color: Colors.white, fontSize: 18),
-                  ),
-                ],
-              ),
-            ),
-          ),
+  Widget _buildControls() => Container(
+    color: Colors.black, padding: const EdgeInsets.all(16),
+    child: Row(children: [
+      Expanded(flex: 3, child: ElevatedButton.icon(
+        onPressed: _camReady ? _startScan : null,
+        icon: Icon(_scanning ? Icons.stop_circle : Icons.document_scanner, size: 28),
+        label: Text(_scanning ? 'Stop Scan' : 'Start Scan', style: const TextStyle(fontSize: 18)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _scanning ? Colors.redAccent : Colors.greenAccent,
+          foregroundColor: Colors.black,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+      )),
+      if (_last != null) ...[
+        const SizedBox(width: 12),
+        Expanded(child: ElevatedButton.icon(
+          onPressed: _restart,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Restart'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey[700], foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        )),
       ],
-    );
-  }
-
-  Widget _buildResultPanel() {
-    final result = _lastResult!;
-    return Container(
-      color: Colors.grey[850],
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Total
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Total Amount:',
-                style: TextStyle(color: Colors.white70, fontSize: 14),
-              ),
-              Text(
-                '₹${result.totalAmount}',
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // Notes chips
-          Wrap(
-            spacing: 8,
-            children: result.detectedNotes.map((note) {
-              return Chip(
-                label: Text(
-                  '₹$note',
-                  style: const TextStyle(color: Colors.black),
-                ),
-                backgroundColor: Colors.greenAccent,
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionButtons() {
-    return Container(
-      color: Colors.black,
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          // Scan Button (main CTA - large for accessibility)
-          Expanded(
-            flex: 3,
-            child: ElevatedButton.icon(
-              onPressed: _isCameraReady ? _startScanning : null,
-              icon: Icon(
-                _isScanning ? Icons.stop_circle : Icons.document_scanner,
-                size: 28,
-              ),
-              label: Text(
-                _isScanning ? 'Stop Scan' : 'Start Scan',
-                style: const TextStyle(fontSize: 18),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isScanning
-                    ? Colors.redAccent
-                    : Colors.greenAccent,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Restart Button
-          if (_lastResult != null)
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _restart,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Restart'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.grey[700],
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+    ]),
+  );
 }

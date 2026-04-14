@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import '../services/tts_service.dart';
+import '../services/volume_button_service.dart';
 import 'registration.dart';
 import 'profile_screen.dart';
 
@@ -13,22 +15,26 @@ class AIBuddyScreen extends StatefulWidget {
   State<AIBuddyScreen> createState() => _AIBuddyScreenState();
 }
 
-class _AIBuddyScreenState extends State<AIBuddyScreen> {
+class _AIBuddyScreenState extends State<AIBuddyScreen>
+    with WidgetsBindingObserver {
   late GenerativeModel _model;
   late ChatSession _chatSession;
   late FlutterTts _tts;
   late stt.SpeechToText _speech;
+  final VolumeButtonService _volumeService = VolumeButtonService();
+  final TtsService _ttsService = TtsService();
 
   final List<Message> _messages = [];
   final _textController = TextEditingController();
   bool _loading = false;
   bool _listening = false;
   String _recognizedText = '';
-  bool _isSpeaking = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _setupVolumeListener();
     _initializeGemini();
     _initializeTTS();
     _initializeSpeechRecognition();
@@ -36,10 +42,7 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
 
   void _initializeGemini() {
     const String apiKey = 'REDACTED_PRIVATE_API_KEY';
-    _model = GenerativeModel(
-      model: 'gemini-pro',
-      apiKey: apiKey,
-    );
+    _model = GenerativeModel(model: 'gemini-pro', apiKey: apiKey);
     _chatSession = _model.startChat();
   }
 
@@ -59,15 +62,17 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
       _recognizedText = '';
       if (await _speech.initialize()) {
         setState(() => _listening = true);
-        _speech.listen(onResult: (result) {
-          setState(() {
-            _recognizedText = result.recognizedWords;
-          });
-          if (result.finalResult) {
-            _textController.text = result.recognizedWords;
-            setState(() => _listening = false);
-          }
-        });
+        _speech.listen(
+          onResult: (result) {
+            setState(() {
+              _recognizedText = result.recognizedWords;
+            });
+            if (result.finalResult) {
+              _textController.text = result.recognizedWords;
+              setState(() => _listening = false);
+            }
+          },
+        );
       }
     } else {
       _speech.stop();
@@ -76,9 +81,57 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
   }
 
   void _speak(String text) async {
-    setState(() => _isSpeaking = true);
     await _tts.speak(text);
-    setState(() => _isSpeaking = false);
+  }
+
+  // ── Volume button listener ──────────────────────────────────────────────
+
+  void _setupVolumeListener() {
+    _volumeService.initialize(
+      onVolumeUp: _handleVolumeUp,
+      onVolumeDown: () async {
+        await _ttsService.speak('Going back to home');
+        if (mounted) Navigator.pop(context);
+      },
+    );
+  }
+
+  Future<void> _handleVolumeUp() async {
+    // Start listening for voice input
+    if (!_listening) {
+      await _startVoiceInput();
+    }
+  }
+
+  Future<void> _startVoiceInput() async {
+    if (_listening) return;
+
+    setState(() {
+      _listening = true;
+      _recognizedText = '';
+    });
+    await _ttsService.speak('Listening...');
+
+    await _speech.listen(
+      onResult: (result) {
+        setState(() => _recognizedText = result.recognizedWords);
+        if (result.finalResult) {
+          setState(() => _listening = false);
+          if (_recognizedText.isNotEmpty) {
+            _textController.text = _recognizedText;
+            _sendMessage();
+          }
+        }
+      },
+      listenFor: const Duration(seconds: 5),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      _speech.stop();
+    }
   }
 
   Future<void> _sendMessage() async {
@@ -100,9 +153,9 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
       });
       _speak(responseText);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: ${e.toString()}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
     } finally {
       setState(() => _loading = false);
     }
@@ -110,9 +163,12 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _textController.dispose();
     _speech.stop();
     _tts.stop();
+    _volumeService.dispose();
+    _ttsService.dispose();
     super.dispose();
   }
 
@@ -150,11 +206,19 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.chat_outlined,
-                            size: 64, color: const Color.fromARGB(255, 105, 118, 30)),
+                        Icon(
+                          Icons.chat_outlined,
+                          size: 64,
+                          color: const Color.fromARGB(255, 105, 118, 30),
+                        ),
                         const SizedBox(height: 16),
-                        const Text('Start a conversation',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Start a conversation',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ],
                     ),
                   )
@@ -163,13 +227,15 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
                     itemBuilder: (context, index) {
                       final msg = _messages[index];
                       return Align(
-                        alignment:
-                            msg.fromUser ? Alignment.centerRight : Alignment.centerLeft,
+                        alignment: msg.fromUser
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
                         child: Container(
                           margin: const EdgeInsets.all(8),
                           padding: const EdgeInsets.all(12),
-                          constraints:
-                              BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.75,
+                          ),
                           decoration: BoxDecoration(
                             color: msg.fromUser
                                 ? const Color.fromARGB(255, 3, 251, 40)
@@ -200,8 +266,10 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
                       color: Colors.blue[100],
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Text('Heard: $_recognizedText',
-                        style: const TextStyle(fontSize: 14, color: Colors.blue)),
+                    child: Text(
+                      'Heard: $_recognizedText',
+                      style: const TextStyle(fontSize: 14, color: Colors.blue),
+                    ),
                   ),
                 if (_recognizedText.isNotEmpty) const SizedBox(height: 8),
                 Row(
@@ -211,8 +279,13 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
                         controller: _textController,
                         decoration: InputDecoration(
                           hintText: 'Type or speak...',
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
                         ),
                       ),
                     ),
@@ -234,7 +307,9 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
                               height: 20,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation(Colors.black),
+                                valueColor: AlwaysStoppedAnimation(
+                                  Colors.black,
+                                ),
                               ),
                             )
                           : const Icon(Icons.send, color: Colors.black),
