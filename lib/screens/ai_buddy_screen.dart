@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'registration.dart';
@@ -21,6 +22,8 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
 
   final List<Message> _messages = [];
   final _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final FocusNode _focusNode = FocusNode();
   bool _loading = false;
   bool _listening = false;
   String _recognizedText = '';
@@ -31,13 +34,30 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
     super.initState();
     _initializeGemini();
     _initializeTTS();
-    _initializeSpeechRecognition();
+    _initializeSpeechRecognition().then((_) {
+      if (mounted) _startListening();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   void _initializeGemini() {
     const String apiKey = 'REDACTED_PRIVATE_API_KEY';
     _model = GenerativeModel(
-      model: 'gemini-pro',
+      model: 'gemini-3-flash-preview',
       apiKey: apiKey,
     );
     _chatSession = _model.startChat();
@@ -46,71 +66,95 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
   void _initializeTTS() {
     _tts = FlutterTts();
     _tts.setLanguage("en-US");
-    _tts.setSpeechRate(1.0);
+    _tts.setSpeechRate(0.5);
+    _tts.setCompletionHandler(() {
+      if (mounted) {
+        setState(() => _isSpeaking = false);
+        _startListening();
+      }
+    });
   }
 
-  void _initializeSpeechRecognition() async {
+  Future<void> _initializeSpeechRecognition() async {
     _speech = stt.SpeechToText();
     await _speech.initialize();
   }
 
   void _startListening() async {
-    if (!_listening) {
+    if (!_listening && mounted) {
       _recognizedText = '';
       if (await _speech.initialize()) {
         setState(() => _listening = true);
         _speech.listen(onResult: (result) {
-          setState(() {
-            _recognizedText = result.recognizedWords;
-          });
-          if (result.finalResult) {
-            _textController.text = result.recognizedWords;
-            setState(() => _listening = false);
+          if (mounted) {
+            setState(() {
+              _recognizedText = result.recognizedWords;
+            });
+            if (result.finalResult) {
+              _textController.text = result.recognizedWords;
+              setState(() => _listening = false);
+              if (_textController.text.trim().isNotEmpty) {
+                _sendMessage();
+              }
+            }
           }
         });
       }
-    } else {
+    } else if (mounted) {
       _speech.stop();
       setState(() => _listening = false);
     }
   }
 
   void _speak(String text) async {
-    setState(() => _isSpeaking = true);
+    if (_listening) {
+      _speech.stop();
+      if (mounted) setState(() => _listening = false);
+    }
+    if (mounted) setState(() => _isSpeaking = true);
     await _tts.speak(text);
-    setState(() => _isSpeaking = false);
   }
 
   Future<void> _sendMessage() async {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
 
-    setState(() {
-      _loading = true;
-      _messages.add(Message(text: text, fromUser: true));
-      _textController.clear();
-      _recognizedText = '';
-    });
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _messages.add(Message(text: text, fromUser: true));
+        _textController.clear();
+        _recognizedText = '';
+      });
+      _scrollToBottom();
+    }
 
     try {
       final response = await _chatSession.sendMessage(Content.text(text));
       final responseText = response.text ?? 'No response';
-      setState(() {
-        _messages.add(Message(text: responseText, fromUser: false));
-      });
+      if (mounted) {
+        setState(() {
+          _messages.add(Message(text: responseText, fromUser: false));
+        });
+        _scrollToBottom();
+      }
       _speak(responseText);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: ${e.toString()}')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
+      }
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   void dispose() {
     _textController.dispose();
+    _scrollController.dispose();
+    _focusNode.dispose();
     _speech.stop();
     _tts.stop();
     super.dispose();
@@ -118,30 +162,43 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Time pass with AI buddy'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person),
-            onPressed: () async {
-              final user = FirebaseAuth.instance.currentUser;
-              if (user == null) {
+    return KeyboardListener(
+      focusNode: _focusNode,
+      onKeyEvent: (KeyEvent event) {
+        if (event is KeyDownEvent) {
+          if (event.logicalKey == LogicalKeyboardKey.audioVolumeUp) {
+            if (!_listening && !_loading) {
+              _startListening();
+            }
+          } else if (event.logicalKey == LogicalKeyboardKey.audioVolumeDown) {
+            Navigator.of(context).pop();
+          }
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Time pass with AI buddy'),
+          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.person),
+              onPressed: () async {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user == null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                  );
+                  return;
+                }
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
                 );
-                return;
-              }
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              );
-            },
-          ),
-        ],
-      ),
+              },
+            ),
+          ],
+        ),
       body: Column(
         children: [
           Expanded(
@@ -159,6 +216,7 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
                     ),
                   )
                 : ListView.builder(
+                    controller: _scrollController,
                     itemCount: _messages.length,
                     itemBuilder: (context, index) {
                       final msg = _messages[index];
@@ -246,6 +304,7 @@ class _AIBuddyScreenState extends State<AIBuddyScreen> {
           ),
         ],
       ),
+    )
     );
   }
 }
