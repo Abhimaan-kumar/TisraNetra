@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../services/tts_service.dart';
+import '../services/volume_button_service.dart';
 import 'profile_screen.dart';
 import 'registration.dart';
 import 'video_call_screen.dart';
@@ -9,12 +11,49 @@ class TalkWithVoluntaryScreen extends StatefulWidget {
   const TalkWithVoluntaryScreen({super.key});
 
   @override
-  State<TalkWithVoluntaryScreen> createState() => _TalkWithVoluntaryScreenState();
+  State<TalkWithVoluntaryScreen> createState() =>
+      _TalkWithVoluntaryScreenState();
 }
 
-class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen> {
+class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
+    with WidgetsBindingObserver {
   String? _currentRequestId;
   bool _creatingRequest = false;
+  final VolumeButtonService _volumeService = VolumeButtonService();
+  final TtsService _ttsService = TtsService();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _setupVolumeListener();
+  }
+
+  void _setupVolumeListener() {
+    _volumeService.initialize(
+      onVolumeUp: () async {
+        if (_currentRequestId == null) {
+          await _createHelpRequest();
+        }
+      },
+      onVolumeDown: () async {
+        if (_currentRequestId != null) {
+          await _cancelRequest();
+        } else {
+          await _ttsService.speak('Going back to home');
+          if (mounted) Navigator.pop(context);
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _volumeService.dispose();
+    _ttsService.dispose();
+    super.dispose();
+  }
 
   CollectionReference<Map<String, dynamic>> get _helpRequests =>
       FirebaseFirestore.instance.collection('help_requests');
@@ -138,7 +177,10 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     backgroundColor: const Color.fromARGB(255, 142, 73, 37),
                     foregroundColor: Colors.white,
-                    textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    textStyle: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               )
@@ -157,7 +199,8 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen> {
                           const Text('Request ended'),
                           const SizedBox(height: 12),
                           ElevatedButton(
-                            onPressed: () => setState(() => _currentRequestId = null),
+                            onPressed: () =>
+                                setState(() => _currentRequestId = null),
                             child: const Text('Back'),
                           ),
                         ],
@@ -188,7 +231,8 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen> {
 
                     String statusText;
                     if (status == 'pending') {
-                      statusText = 'Waiting for a volunteer to accept your request...';
+                      statusText =
+                          'Waiting for a volunteer to accept your request...';
                     } else if (status == 'accepted') {
                       statusText = 'Connecting to volunteer...';
                     } else if (status == 'cancelled') {
@@ -203,10 +247,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen> {
                         const SizedBox(height: 24),
                         const CircularProgressIndicator(),
                         const SizedBox(height: 16),
-                        Text(
-                          statusText,
-                          textAlign: TextAlign.center,
-                        ),
+                        Text(statusText, textAlign: TextAlign.center),
                         const SizedBox(height: 24),
                         TextButton.icon(
                           icon: const Icon(Icons.cancel),

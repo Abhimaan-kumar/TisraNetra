@@ -7,12 +7,16 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.lifelens.app/volumebutton"
+    private lateinit var volumeButtonChannel: MethodChannel
     
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-            .setMethodCallHandler { _, _ -> }
+        // Create channel once and reuse it
+        volumeButtonChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        volumeButtonChannel.setMethodCallHandler { _, result -> 
+            result.notImplemented()
+        }
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -30,7 +34,6 @@ class MainActivity: FlutterActivity() {
     }
     
     private fun sendVolumeButtonEvent(method: String) {
-        MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL)
-            .invokeMethod(method, null)
+        volumeButtonChannel.invokeMethod(method, null)
     }
 }

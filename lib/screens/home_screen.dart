@@ -1,9 +1,11 @@
+// lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+import '../services/volume_button_service.dart';
+import '../services/tts_service.dart';
 import 'profile_screen.dart';
 import '../widgets/menu_option.dart';
 import '../widgets/menu_card.dart';
@@ -19,285 +21,325 @@ import 'ai_buddy_screen.dart';
 import 'emergency_screen.dart';
 import 'registration.dart';
 
-// Command mapping for screens
-final Map<String, (String label, Widget Function() builder)>
-commandScreenMap = {
-  'read': ('Read Anything', () => const ReadAnythingScreen()),
-  'currency': ('Currency', () => const CurrencyScreen()),
-  'navigate': ('Navigate', () => const NavigateScreen()),
-  'object': ('Object Recognition', () => const ObjectRecognitionScreen()),
-  'scene': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'caption': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'person': ('Person Identification', () => const PersonIdentificationScreen()),
-  'identify': (
-    'Person Identification',
-    () => const PersonIdentificationScreen(),
-  ),
-  'color': ('Color', () => const ColorScreen()),
-  'talk': ('Talk with Voluntary', () => const TalkWithVoluntaryScreen()),
-  'voluntary': ('Talk with Voluntary', () => const TalkWithVoluntaryScreen()),
-  'ai': ('AI Buddy', () => const AIBuddyScreen()),
-  'buddy': ('AI Buddy', () => const AIBuddyScreen()),
-  'emergency': ('Emergency', () => const EmergencyScreen()),
+// ─── Command → screen mapping (English + Hindi intents) ──────────────────────
+final Map<String, (String label, Widget Function() builder)> _cmdMap = {
+  // Read Anything
+  'read'         : ('Read Anything',          () => const ReadAnythingScreen()),
+  'padho'        : ('Read Anything',          () => const ReadAnythingScreen()),
+  'padhna'       : ('Read Anything',          () => const ReadAnythingScreen()),
+  'text'         : ('Read Anything',          () => const ReadAnythingScreen()),
+  'likha'        : ('Read Anything',          () => const ReadAnythingScreen()),
+  'kya likha'    : ('Read Anything',          () => const ReadAnythingScreen()),
+
+  // Currency
+  'currency'     : ('Currency',               () => const CurrencyScreen()),
+  'rupee'        : ('Currency',               () => const CurrencyScreen()),
+  'paisa'        : ('Currency',               () => const CurrencyScreen()),
+  'note'         : ('Currency',               () => const CurrencyScreen()),
+  'money'        : ('Currency',               () => const CurrencyScreen()),
+  'paise'        : ('Currency',               () => const CurrencyScreen()),
+
+  // Navigate
+  'navigate'     : ('Navigate',               () => const NavigateScreen()),
+  'navigation'   : ('Navigate',               () => const NavigateScreen()),
+  'direction'    : ('Navigate',               () => const NavigateScreen()),
+  'rasta'        : ('Navigate',               () => const NavigateScreen()),
+  'raasta'       : ('Navigate',               () => const NavigateScreen()),
+
+  // Object Recognition
+  'object'       : ('Object Recognition',     () => const ObjectRecognitionScreen()),
+  'recognize'    : ('Object Recognition',     () => const ObjectRecognitionScreen()),
+  'objects'      : ('Object Recognition',     () => const ObjectRecognitionScreen()),
+  'cheez'        : ('Object Recognition',     () => const ObjectRecognitionScreen()),
+  'kya hai'      : ('Object Recognition',     () => const ObjectRecognitionScreen()),
+
+  // Scene Captioning
+  'scene'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'caption'      : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'describe'     : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'description'  : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'batao'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'samne'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
+
+  // Person Identification
+  'person'       : ('Person Identification',  () => const PersonIdentificationScreen()),
+  'identify'     : ('Person Identification',  () => const PersonIdentificationScreen()),
+  'face'         : ('Person Identification',  () => const PersonIdentificationScreen()),
+  'kaun'         : ('Person Identification',  () => const PersonIdentificationScreen()),
+  'kon hai'      : ('Person Identification',  () => const PersonIdentificationScreen()),
+  'pehchano'     : ('Person Identification',  () => const PersonIdentificationScreen()),
+  'aadmi kaun hai': ('Person Identification',  () => const PersonIdentificationScreen()),
+  'aurat kaun hai': ('Person Identification',  () => const PersonIdentificationScreen()),
+  // Color
+  'color'        : ('Color',                  () => const ColorScreen()),
+  'colour'       : ('Color',                  () => const ColorScreen()),
+  'rang'         : ('Color',                  () => const ColorScreen()),
+  'kaunsa rang'  : ('Color',                  () => const ColorScreen()),
+
+  // Talk with Voluntary
+  'talk'         : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+  'voluntary'    : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+  'volunteer'    : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+  'help'         : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+  'madad'        : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+  'sahayata'     : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+
+  // AI Buddy
+  'ai'           : ('AI Buddy',               () => const AIBuddyScreen()),
+  'buddy'        : ('AI Buddy',               () => const AIBuddyScreen()),
+  'chat'         : ('AI Buddy',               () => const AIBuddyScreen()),
+  'baat'         : ('AI Buddy',               () => const AIBuddyScreen()),
+  'timepass'     : ('AI Buddy',               () => const AIBuddyScreen()),
+
+  // Emergency
+  'emergency'    : ('Emergency',              () => const EmergencyScreen()),
+  'bachao'       : ('Emergency',              () => const EmergencyScreen()),
+  'help me'      : ('Emergency',              () => const EmergencyScreen()),
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.title});
-
   final String title;
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final FlutterTts _tts = FlutterTts();
-  final stt.SpeechToText _speech = stt.SpeechToText();
-  String _lastWords = '';
-  bool _listening = false;
+  final VolumeButtonService _volService  = VolumeButtonService();
+  final TtsService          _tts         = TtsService();
+  final stt.SpeechToText    _speech      = stt.SpeechToText();
+
+  bool _sttReady    = false;
+  bool _listening   = false;
 
   @override
   void initState() {
     super.initState();
-    _setupVolumeButtonListener();
+    _initStt();
+    _setupVolume();
     _welcome();
+    _redirectIfVolunteer();
   }
 
-  void _setupVolumeButtonListener() {
-    // Listen to hardware buttons using method channel
-    const platform = MethodChannel('com.lifelens.app/volumebutton');
-    platform.setMethodCallHandler((call) async {
-      if (call.method == 'onVolumeUp') {
-        _speak('Listening...');
-        _startListeningFor5Seconds();
-      } else if (call.method == 'onVolumeDown') {
-        _stopListening();
-        _speak('Listening stopped.');
-      }
-    });
+  // ── Init ─────────────────────────────────────────────────────────────────────
+
+  Future<void> _initStt() async {
+    _sttReady = await _speech.initialize(
+      onStatus: (s) {
+        if ((s == 'done' || s == 'notListening') && mounted) {
+          setState(() => _listening = false);
+        }
+      },
+      onError: (_) {
+        if (mounted) setState(() => _listening = false);
+      },
+    );
   }
 
+  void _setupVolume() {
+    _volService.initialize(
+      onVolumeUp: _onVolumeUp,
+      onVolumeDown: () async {
+        await _tts.speak('You are already on the home screen.');
+      },
+    );
+  }
 
   Future<void> _welcome() async {
-    await _speak('Welcome to LifeLens. Press volume up to give a command.');
+    await Future.delayed(const Duration(milliseconds: 800));
+    await _tts.speak(
+      'Welcome to LifeLens. Press volume up and say a feature name to open it.',
+    );
   }
 
-  void _startListeningFor5Seconds() async {
+  Future<void> _redirectIfVolunteer() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     try {
-      bool available = await _speech.initialize(
-        onStatus: (val) {},
-        onError: (val) {
-          debugPrint('STT Error: $val');
-        },
-      );
-      if (available) {
-        setState(() => _listening = true);
-        _speech.listen(
-          onResult: (val) {
-            if (val.finalResult) {
-              setState(() {
-                _lastWords = val.recognizedWords;
-              });
-            }
-          },
-        );
+      final doc = await FirebaseFirestore.instance
+          .collection('users').doc(user.uid).get();
+      if ((doc.data()?['userType'] as String? ?? '').toLowerCase() ==
+          'volunteer') {
+        if (mounted) {
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const VolunteerScreen()));
+        }
+      }
+    } catch (_) {}
+  }
 
-        // Stop listening after 5 seconds
-        Future.delayed(const Duration(seconds: 5), () {
-          if (mounted && _listening) {
-            _stopListening();
-            _handleCommand(_lastWords.toLowerCase());
+  // ── Volume up ─────────────────────────────────────────────────────────────────
+
+  Future<void> _onVolumeUp() async {
+    if (_listening) {
+      // Second press cancels listening
+      await _speech.stop();
+      if (mounted) setState(() => _listening = false);
+      return;
+    }
+    if (!_sttReady) {
+      await _tts.speak('Microphone not available.');
+      return;
+    }
+
+    await _tts.stop();
+    if (mounted) setState(() => _listening = true);
+    await _tts.speak('Listening…');
+
+    await _speech.listen(
+      onResult: (result) async {
+        if (!mounted) return;
+        final words = result.recognizedWords.toLowerCase().trim();
+        if (result.finalResult) {
+          setState(() => _listening = false);
+          if (words.isEmpty) {
+            await _tts.speak(
+                'I did not hear anything. Press volume up again.');
+          } else {
+            await _handleCommand(words);
           }
-        });
-      }
-    } catch (e) {
-      debugPrint('Speech Recognition Error: $e');
-      await _speak('Error accessing microphone. Please check permissions.');
-    }
+        }
+      },
+      listenFor: const Duration(seconds: 8),
+      pauseFor: const Duration(seconds: 3),
+      partialResults: false,
+      cancelOnError: true,
+      listenMode: stt.ListenMode.confirmation,
+    );
   }
 
-  void _stopListening() {
-    _speech.stop();
-    setState(() => _listening = false);
-  }
+  // ── Command dispatch ──────────────────────────────────────────────────────────
 
-  Future<void> _speak(String text) async {
-    try {
-      await _tts.setSpeechRate(1.0);
-      await _tts.setVolume(1.0);
-      await _tts.setPitch(1.0);
-      await _tts.speak(text);
-    } catch (e) {
-      debugPrint('TTS Error: $e');
-    }
-  }
+  Future<void> _handleCommand(String words) async {
+    final isHindi = RegExp(r'[\u0900-\u097F]').hasMatch(words);
 
-  void _handleCommand(String command) async {
-    // Find matching command
     String? matchedKey;
-    for (final key in commandScreenMap.keys) {
-      if (command.contains(key)) {
-        matchedKey = key;
-        break;
-      }
+    for (final key in _cmdMap.keys) {
+      if (words.contains(key)) { matchedKey = key; break; }
     }
 
-    if (matchedKey != null) {
-      final (label, builder) = commandScreenMap[matchedKey]!;
-      await _speak('Opening $label');
-      if (mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => builder()),
-        ).then(
-          (_) => _speak('Back to home. Press volume up to give a command.'),
-        );
+    if (matchedKey == null) {
+      if (isHindi) {
+        await _tts.speak(
+            'माफ कीजिए, मुझे समझ नहीं आया। '
+            'वॉल्यूम अप दबाकर फिर से बोलें।');
+      } else {
+        await _tts.speak(
+            'Sorry, I did not understand. '
+            'Press volume up again and say a feature name.');
       }
+      return;
+    }
+
+    final (label, builder) = _cmdMap[matchedKey]!;
+
+    if (isHindi) {
+      await _tts.speak('$label खोल रहे हैं।');
     } else {
-      await _speak(
-        'Sorry, I did not catch that. Press volume up again to give a command.',
-      );
+      await _tts.speak('Opening $label.');
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+        context, MaterialPageRoute(builder: (_) => builder()));
+
+    if (mounted) {
+      if (isHindi) {
+        await _tts.speak(
+            'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।');
+      } else {
+        await _tts.speak(
+            'Back to home. Press volume up to open a feature.');
+      }
     }
   }
+
+  // ── Dispose ───────────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
-    _speech.stop();
-    _tts.stop();
+    _volService.dispose();
+    _speech.cancel();
+    _tts.dispose();
     super.dispose();
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    final List<MenuOption> options = [
-      MenuOption(
-        'Read Anything',
-        Icons.book,
-        const Color.fromARGB(255, 3, 153, 138),
-        const ReadAnythingScreen(),
-      ),
-      MenuOption(
-        'Currency',
-        Icons.attach_money,
-        Colors.deepPurple,
-        const CurrencyScreen(),
-      ),
-      MenuOption(
-        'Navigate',
-        Icons.navigation,
-        Colors.indigo,
-        const NavigateScreen(),
-      ),
-      MenuOption(
-        'Object Recognition',
-        Icons.search,
-        Colors.green,
-        const ObjectRecognitionScreen(),
-      ),
-      MenuOption(
-        'Scene Captioning',
-        Icons.camera_alt,
-        const Color.fromARGB(255, 1, 142, 85),
-        const SceneCaptioningScreen(),
-      ),
-      MenuOption(
-        'Person Identification',
-        Icons.tag_faces_outlined,
-        const Color.fromARGB(255, 207, 176, 103),
-        const PersonIdentificationScreen(),
-      ),
-      MenuOption(
-        'Color',
-        Icons.color_lens,
-        const Color.fromARGB(255, 30, 121, 233),
-        const ColorScreen(),
-      ),
-      MenuOption(
-        'Talk with Voluntary',
-        Icons.phone_in_talk_rounded,
-        const Color.fromARGB(255, 142, 73, 37),
-        const TalkWithVoluntaryScreen(),
-      ),
-      MenuOption(
-        'Time pass with AI buddy',
-        Icons.chat_outlined,
-        const Color.fromARGB(255, 105, 118, 30),
-        const AIBuddyScreen(),
-      ),
-      MenuOption(
-        'Emergency',
-        Icons.emoji_people_rounded,
-        const Color.fromARGB(255, 255, 0, 0),
-        const EmergencyScreen(),
-      ),
+    final options = [
+      MenuOption('Read Anything',         Icons.book,                  const Color(0xFF03998A), const ReadAnythingScreen()),
+      MenuOption('Currency',              Icons.attach_money,           Colors.deepPurple,        const CurrencyScreen()),
+      MenuOption('Navigate',              Icons.navigation,             Colors.indigo,            const NavigateScreen()),
+      MenuOption('Object Recognition',    Icons.search,                 Colors.green,             const ObjectRecognitionScreen()),
+      MenuOption('Scene Captioning',      Icons.camera_alt,             const Color(0xFF018E55),  const SceneCaptioningScreen()),
+      MenuOption('Person Identification', Icons.tag_faces_outlined,     const Color(0xFFCFB067),  const PersonIdentificationScreen()),
+      MenuOption('Color',                 Icons.color_lens,             const Color(0xFF1E79E9),  const ColorScreen()),
+      MenuOption('Talk with Volunteer',   Icons.phone_in_talk_rounded,  const Color(0xFF8E4925),  const TalkWithVoluntaryScreen()),
+      MenuOption('AI Buddy',              Icons.chat_outlined,          const Color(0xFF69761E),  const AIBuddyScreen()),
+      MenuOption('Emergency',             Icons.emoji_people_rounded,   Colors.red,               const EmergencyScreen()),
     ];
 
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset(
-              'images/logo.png',
-              width: 80,
-              height: 80,
-              errorBuilder: (ctx, obj, stack) => const SizedBox.shrink(),
-            ),
-            const SizedBox(width: 8),
-            Text("Life Lens", style: Theme.of(context).textTheme.headlineSmall),
-          ],
-        ),
+        title: Row(mainAxisSize: MainAxisSize.min, children: [
+          Image.asset('images/logo.png', width: 80, height: 80,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+          const SizedBox(width: 8),
+          Text('Life Lens', style: Theme.of(context).textTheme.headlineSmall),
+        ]),
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
             onPressed: () async {
               final user = FirebaseAuth.instance.currentUser;
-              if (user == null) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-                ).then(
-                  (_) => _speak(
-                    'Back to home. Press volume up to give a command.',
-                  ),
-                );
-                return;
-              }
-              // If logged in, open Profile screen
-              Navigator.push(
+              await Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              ).then(
-                (_) =>
-                    _speak('Back to home. Press volume up to give a command.'),
+                MaterialPageRoute(
+                  builder: (_) => user == null
+                      ? const RegistrationScreen()
+                      : const ProfileScreen(),
+                ),
               );
+              await _tts.speak(
+                  'Back to home. Press volume up to open a feature.');
             },
           ),
         ],
       ),
       body: Padding(
-        padding: const EdgeInsets.all(30.0),
-        child: Column(
-          children: [
-            Text(
-             "Welcome ${widget.title}"),
-            const SizedBox(height: 8),
-            Text(
-              _listening ? 'Listening...' : 'Press Volume Up to start',
-              style: const TextStyle(fontSize: 16),
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: GridView.count(
-                crossAxisCount: 2,
-                crossAxisSpacing: 20,
-                mainAxisSpacing: 20,
-                children: options.map((opt) => MenuCard(option: opt)).toList(),
+        padding: const EdgeInsets.all(30),
+        child: Column(children: [
+          Text('Welcome ${widget.title}'),
+          const SizedBox(height: 8),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Text(
+              _listening
+                  ? '🎤 Listening… say a feature name'
+                  : 'Press Volume Up to open a feature',
+              key: ValueKey(_listening),
+              style: TextStyle(
+                fontSize: 15,
+                color: _listening ? Colors.deepPurple : Colors.black87,
+                fontWeight: _listening ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: GridView.count(
+              crossAxisCount: 2,
+              crossAxisSpacing: 20,
+              mainAxisSpacing: 20,
+              children: options.map((o) => MenuCard(option: o)).toList(),
+            ),
+          ),
+        ]),
       ),
     );
   }

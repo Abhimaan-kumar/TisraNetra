@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'home_screen.dart'; // added
 import '../services/fcm_service.dart';
 
@@ -21,7 +20,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => isLoading = true);
     try {
-      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
       );
@@ -65,15 +64,22 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               TextFormField(
                 controller: emailController,
-                decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  border: OutlineInputBorder(),
+                ),
                 validator: (v) => v == null || v.isEmpty ? 'Enter email' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: passwordController,
                 obscureText: true,
-                decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
-                validator: (v) => v == null || v.length < 6 ? 'Minimum 6 chars' : null,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) =>
+                    v == null || v.length < 6 ? 'Minimum 6 chars' : null,
               ),
               const SizedBox(height: 20),
               SizedBox(
@@ -81,7 +87,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 height: 48,
                 child: ElevatedButton(
                   onPressed: isLoading ? null : signIn,
-                  child: isLoading ? const CircularProgressIndicator(color: Colors.white) : const Text('Login'),
+                  child: isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text('Login'),
                 ),
               ),
             ],
