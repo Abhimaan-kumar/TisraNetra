@@ -27,6 +27,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   late SignalingService _signaling;
   bool _connected = false;
   bool _initializing = true;
+  bool _isFlashlightOn = false;
 
   @override
   void initState() {
@@ -65,6 +66,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   Future<void> _hangUp() async {
     await _signaling.endCall();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _toggleFlashlight() async {
+    setState(() {
+      _isFlashlightOn = !_isFlashlightOn;
+    });
+    await _signaling.toggleFlashlight(_isFlashlightOn);
   }
 
   @override
@@ -210,28 +218,50 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
               ),
             ),
 
-          // ─── Bottom bar with hang-up button ───────────────
+          // ─── Bottom bar with controls ─────────────────────
           Positioned(
             bottom: 40,
             left: 0,
             right: 0,
-            child: Center(
-              child: GestureDetector(
-                onTap: _hangUp,
-                child: Container(
-                  width: 64,
-                  height: 64,
-                  decoration: const BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (widget.role == 'volunteer') ...[
+                  GestureDetector(
+                    onTap: _toggleFlashlight,
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: _isFlashlightOn ? Colors.yellow : Colors.grey[800],
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        _isFlashlightOn ? Icons.flash_on : Icons.flash_off,
+                        color: _isFlashlightOn ? Colors.black : Colors.white,
+                        size: 28,
+                      ),
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.call_end,
-                    color: Colors.white,
-                    size: 32,
+                  const SizedBox(width: 32),
+                ],
+                GestureDetector(
+                  onTap: _hangUp,
+                  child: Container(
+                    width: 64,
+                    height: 64,
+                    decoration: const BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.call_end,
+                      color: Colors.white,
+                      size: 32,
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
           ),
         ],

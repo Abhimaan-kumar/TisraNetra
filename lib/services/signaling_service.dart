@@ -28,6 +28,12 @@ class SignalingService {
       .collection('signaling')
       .doc('answer');
 
+  DocumentReference get _controlsDoc => FirebaseFirestore.instance
+      .collection('help_requests')
+      .doc(requestId)
+      .collection('signaling')
+      .doc('controls');
+
   CollectionReference get _candidatesCol => FirebaseFirestore.instance
       .collection('help_requests')
       .doc(requestId)
@@ -171,7 +177,18 @@ class SignalingService {
       }
     }));
 
-    // 9. Listen for remote ICE candidates (from volunteer)
+    // 9. Listen for flashlight controls
+    _subs.add(_controlsDoc.snapshots().listen((snap) async {
+      if (!snap.exists) return;
+      final data = snap.data() as Map<String, dynamic>?;
+      if (data == null) return;
+      if (data.containsKey('flashlight')) {
+        final bool enable = data['flashlight'] == true;
+        _setTorch(enable);
+      }
+    }));
+
+    // 10. Listen for remote ICE candidates (from volunteer)
     _subs.add(_candidatesCol
         .where('from', isEqualTo: 'volunteer')
         .snapshots()
@@ -275,8 +292,29 @@ class SignalingService {
     }));
   }
 
+  // ──────────────────── Torch / Controls ─────────────────
+  Future<void> toggleFlashlight(bool enable) async {
+    await _controlsDoc.set({'flashlight': enable}, SetOptions(merge: true));
+  }
+
+  Future<void> _setTorch(bool enable) async {
+    if (_localStream != null) {
+      final videoTracks = _localStream!.getVideoTracks();
+      if (videoTracks.isNotEmpty) {
+        try {
+          if (await videoTracks.first.hasTorch()) {
+            await videoTracks.first.setTorch(enable);
+          }
+        } catch (e) {
+          debugPrint('Error setting torch: $e');
+        }
+      }
+    }
+  }
+
   // ──────────────────── cleanup ──────────────────────────
   Future<void> dispose() async {
+    await _setTorch(false);
     for (final s in _subs) {
       s.cancel();
     }
