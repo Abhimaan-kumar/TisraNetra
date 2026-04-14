@@ -98,7 +98,7 @@ class SignalingService {
   }
 
   // ──────────────────── start call (client) ──────────────
-  /// Client creates the offer. Only the client's camera is streamed.
+  /// Client creates the offer and sends their video/audio.
   Future<void> startAsClient() async {
     // 1. Get local media (video + audio)
     _localStream = await navigator.mediaDevices.getUserMedia({
@@ -118,6 +118,13 @@ class SignalingService {
     for (final track in _localStream!.getTracks()) {
       await _pc!.addTrack(track, _localStream!);
     }
+
+    // Listen for remote tracks (volunteer's audio)
+    _pc!.onTrack = (event) {
+      if (event.streams.isNotEmpty) {
+        remoteRenderer.srcObject = event.streams[0];
+      }
+    };
 
     // 4. ICE candidate handler
     _pc!.onIceCandidate = (candidate) {
@@ -183,19 +190,30 @@ class SignalingService {
   }
 
   // ──────────────────── join call (volunteer) ─────────────
-  /// Volunteer only receives the client's stream – no local camera.
+  /// Volunteer receives the client's video/audio stream and sends their local audio.
   Future<void> startAsVolunteer() async {
-    // 1. Create peer connection (no local media)
+    // 1. Get local media (audio only)
+    _localStream = await navigator.mediaDevices.getUserMedia({
+      'audio': true,
+      'video': false,
+    });
+
+    // 2. Create peer connection
     _pc = await createPeerConnection(_config);
 
-    // 2. Receive remote stream
+    // 3. Add local tracks (audio)
+    for (final track in _localStream!.getTracks()) {
+      await _pc!.addTrack(track, _localStream!);
+    }
+
+    // 4. Receive remote stream
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
         remoteRenderer.srcObject = event.streams[0];
       }
     };
 
-    // 3. ICE candidate handler
+    // 5. ICE candidate handler
     _pc!.onIceCandidate = (candidate) {
       _candidatesCol.add({
         'candidate': candidate.candidate,
@@ -205,7 +223,7 @@ class SignalingService {
       });
     };
 
-    // 4. Connection state
+    // 6. Connection state
     _pc!.onConnectionState = (state) {
       debugPrint('[WebRTC] connection state: $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
@@ -217,7 +235,7 @@ class SignalingService {
       }
     };
 
-    // 5. Wait for the offer to appear
+    // 7. Wait for the offer to appear
     _subs.add(_offerDoc.snapshots().listen((snap) async {
       if (!snap.exists) return;
       final data = snap.data() as Map<String, dynamic>?;
@@ -239,7 +257,7 @@ class SignalingService {
       });
     }));
 
-    // 6. Listen for remote ICE candidates (from client)
+    // 8. Listen for remote ICE candidates (from client)
     _subs.add(_candidatesCol
         .where('from', isEqualTo: 'client')
         .snapshots()

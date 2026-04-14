@@ -80,7 +80,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       body: Stack(
         children: [
           // ─── Main video feed ───────────────────────────────
-          if (widget.role == 'client')
+          if (widget.role == 'client') ...[
             // Client sees their own camera
             Positioned.fill(
               child: RTCVideoView(
@@ -88,8 +88,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 mirror: false,
               ),
-            )
-          else
+            ),
+            // Hidden renderer for volunteer's audio
+            Positioned(
+              width: 1,
+              height: 1,
+              child: Offstage(
+                child: RTCVideoView(_signaling.remoteRenderer),
+              ),
+            ),
+          ] else
             // Volunteer sees the remote (client's) camera
             Positioned.fill(
               child: _connected
