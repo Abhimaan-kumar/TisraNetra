@@ -1,23 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-
 import '../services/tts_service.dart';
 import '../services/volume_button_service.dart';
 import 'profile_screen.dart';
 import 'registration.dart';
-import 'video_call_screens.dart';
+import 'video_call_screen.dart';
 
-/// Screen used by a **client** (blind user) to request help from volunteers.
-///
-/// Flow:
-/// - User taps "Call a Volunteer" → new document in `help_requests` collection
-///   with status `pending`.
-/// - All online volunteers listen for `pending` requests.
-/// - First volunteer who accepts atomically updates the document to
-///   `status: accepted, acceptedBy: <volunteerUid>`.
-/// - This screen listens to that document; once it becomes `accepted`, the
-///   client is taken to a one-way video call screen where their camera is shared.
 class TalkWithVoluntaryScreen extends StatefulWidget {
   const TalkWithVoluntaryScreen({super.key});
 
@@ -69,41 +58,53 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
   CollectionReference<Map<String, dynamic>> get _helpRequests =>
       FirebaseFirestore.instance.collection('help_requests');
 
-  Future<void> _ensureLoggedIn() async {
+  // ──────── create a help request in Firestore ───────────
+  Future<void> _requestHelp() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) return;
-
-    // Redirect to registration if not logged in
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-    );
-  }
-
-  Future<void> _createHelpRequest() async {
-    await _ensureLoggedIn();
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      // Must be logged in
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+      );
+      return;
+    }
 
     setState(() => _creatingRequest = true);
+
     try {
-      final doc = await _helpRequests.add({
+      // Fetch the client's name for the notification
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final clientName = userDoc.data()?['name'] ?? 'A client';
+
+      // Create the help request document.
+      // The Cloud Function listens for onCreate on this collection
+      // and sends FCM to all volunteers.
+      final docRef = await _helpRequests.add({
         'clientId': user.uid,
-        'status': 'pending', // pending → accepted / cancelled / ended
+        'clientName': clientName,
+        'status': 'pending', // pending → accepted → ended / cancelled
         'createdAt': FieldValue.serverTimestamp(),
       });
-      setState(() => _currentRequestId = doc.id);
+
+      setState(() {
+        _currentRequestId = docRef.id;
+        _creatingRequest = false;
+      });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to create help request: $e')),
-      );
-    } finally {
+      setState(() => _creatingRequest = false);
       if (mounted) {
-        setState(() => _creatingRequest = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
       }
     }
   }
 
+  // ──────── cancel the pending request ───────────────────
   Future<void> _cancelRequest() async {
     if (_currentRequestId == null) return;
     try {
@@ -111,24 +112,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
         'status': 'cancelled',
       });
     } catch (_) {}
-    if (mounted) {
-      setState(() => _currentRequestId = null);
-    }
-  }
-
-  void _openProfileOrRegistration() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-      );
-      return;
-    }
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-    );
+    setState(() => _currentRequestId = null);
   }
 
   @override
@@ -139,9 +123,24 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
-            onPressed: _openProfileOrRegistration,
+            onPressed: () async {
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                );
+                return;
+              }
+              // If logged in, open Profile screen
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              );
+            },
           ),
         ],
+        
       ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
@@ -172,12 +171,8 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.phone),
-                  label: Text(
-                    _creatingRequest
-                        ? 'Requesting help...'
-                        : 'Call a Volunteer',
-                  ),
-                  onPressed: _creatingRequest ? null : _createHelpRequest,
+                  label: Text(_creatingRequest ? 'Requesting help...' : 'Call a Volunteer'),
+                  onPressed: _creatingRequest ? null : _requestHelp,
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     backgroundColor: const Color.fromARGB(255, 142, 73, 37),
@@ -215,16 +210,20 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
                     final data = snapshot.data!.data() ?? {};
                     final status = (data['status'] ?? 'pending') as String;
 
+                    // ── Navigate to video call when accepted ──
                     if (status == 'accepted') {
-                      // Navigate once to the video call screen
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         final requestId = _currentRequestId;
                         if (requestId == null || !mounted) return;
+                        // Clear so we don't double-navigate
+                        _currentRequestId = null;
                         Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                ClientVideoCallScreen(helpRequestId: requestId),
+                            builder: (_) => VideoCallScreen(
+                              role: 'client',
+                              requestId: requestId,
+                            ),
                           ),
                         );
                       });
