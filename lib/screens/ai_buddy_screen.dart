@@ -119,7 +119,56 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
     }
     if (mounted) setState(() => _isSpeaking = true);
     await _tts.speak(text);
-    setState(() => _isSpeaking = false);
+  }
+
+  // ── Volume button listener ──────────────────────────────────────────────
+
+  void _setupVolumeListener() {
+    _volumeService.initialize(
+      onVolumeUp: _handleVolumeUp,
+      onVolumeDown: () async {
+        await _ttsService.speak('Going back to home');
+        if (mounted) Navigator.pop(context);
+      },
+    );
+  }
+
+  Future<void> _handleVolumeUp() async {
+    // Start listening for voice input
+    if (!_listening) {
+      await _startVoiceInput();
+    }
+  }
+
+  Future<void> _startVoiceInput() async {
+    if (_listening) return;
+
+    setState(() {
+      _listening = true;
+      _recognizedText = '';
+    });
+    await _ttsService.speak('Listening...');
+
+    await _speech.listen(
+      onResult: (result) {
+        setState(() => _recognizedText = result.recognizedWords);
+        if (result.finalResult) {
+          setState(() => _listening = false);
+          if (_recognizedText.isNotEmpty) {
+            _textController.text = _recognizedText;
+            _sendMessage();
+          }
+        }
+      },
+      listenFor: const Duration(seconds: 5),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) {
+      _speech.stop();
+    }
   }
 
   Future<void> _sendMessage() async {
