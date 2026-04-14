@@ -31,7 +31,6 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
   final FocusNode _focusNode = FocusNode();
   bool _loading = false;
   bool _listening = false;
-  bool _isSpeaking = false;
   String _recognizedText = '';
 
   @override
@@ -63,10 +62,7 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
 
   void _initializeGemini() {
     const String apiKey = 'REDACTED_PRIVATE_API_KEY';
-    _model = GenerativeModel(
-      model: 'gemini-3-flash-preview',
-      apiKey: apiKey,
-    );
+    _model = GenerativeModel(model: 'gemini-3-flash-preview', apiKey: apiKey);
     _chatSession = _model.startChat();
   }
 
@@ -76,7 +72,6 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
     _tts.setSpeechRate(0.5);
     _tts.setCompletionHandler(() {
       if (mounted) {
-        setState(() => _isSpeaking = false);
         _startListening();
       }
     });
@@ -92,20 +87,22 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
       _recognizedText = '';
       if (await _speech.initialize()) {
         setState(() => _listening = true);
-        _speech.listen(onResult: (result) {
-          if (mounted) {
-            setState(() {
-              _recognizedText = result.recognizedWords;
-            });
-            if (result.finalResult) {
-              _textController.text = result.recognizedWords;
-              setState(() => _listening = false);
-              if (_textController.text.trim().isNotEmpty) {
-                _sendMessage();
+        _speech.listen(
+          onResult: (result) {
+            if (mounted) {
+              setState(() {
+                _recognizedText = result.recognizedWords;
+              });
+              if (result.finalResult) {
+                _textController.text = result.recognizedWords;
+                setState(() => _listening = false);
+                if (_textController.text.trim().isNotEmpty) {
+                  _sendMessage();
+                }
               }
             }
-          }
-        });
+          },
+        );
       }
     } else if (mounted) {
       _speech.stop();
@@ -118,7 +115,6 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
       _speech.stop();
       if (mounted) setState(() => _listening = false);
     }
-    if (mounted) setState(() => _isSpeaking = true);
     await _tts.speak(text);
   }
 
@@ -198,9 +194,9 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
       _speak(responseText);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -247,7 +243,9 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
                 if (user == null) {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const RegistrationScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const RegistrationScreen(),
+                    ),
                   );
                   return;
                 }
@@ -259,131 +257,137 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
             ),
           ],
         ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _messages.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.chat_outlined,
-                          size: 64,
-                          color: const Color.fromARGB(255, 105, 118, 30),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Start a conversation',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+        body: Column(
+          children: [
+            Expanded(
+              child: _messages.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.chat_outlined,
+                            size: 64,
+                            color: const Color.fromARGB(255, 105, 118, 30),
                           ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = _messages[index];
-                      return Align(
-                        alignment: msg.fromUser
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.all(8),
-                          padding: const EdgeInsets.all(12),
-                          constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.75,
-                          ),
-                          decoration: BoxDecoration(
-                            color: msg.fromUser
-                                ? const Color.fromARGB(255, 3, 251, 40)
-                                : Colors.grey[300],
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            msg.text,
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Start a conversation',
                             style: TextStyle(
-                              color: msg.fromUser ? Colors.black : Colors.black,
-                              fontSize: 14,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              children: [
-                if (_recognizedText.isNotEmpty)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.blue[100],
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      'Heard: $_recognizedText',
-                      style: const TextStyle(fontSize: 14, color: Colors.blue),
-                    ),
-                  ),
-                if (_recognizedText.isNotEmpty) const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _textController,
-                        decoration: InputDecoration(
-                          hintText: 'Type or speak...',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: _scrollController,
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) {
+                        final msg = _messages[index];
+                        return Align(
+                          alignment: msg.fromUser
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            margin: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.all(12),
+                            constraints: BoxConstraints(
+                              maxWidth:
+                                  MediaQuery.of(context).size.width * 0.75,
+                            ),
+                            decoration: BoxDecoration(
+                              color: msg.fromUser
+                                  ? const Color.fromARGB(255, 3, 251, 40)
+                                  : Colors.grey[300],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              msg.text,
+                              style: TextStyle(
+                                color: msg.fromUser
+                                    ? Colors.black
+                                    : Colors.black,
+                                fontSize: 14,
+                              ),
+                            ),
                           ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
+                        );
+                      },
+                    ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  if (_recognizedText.isNotEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[100],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'Heard: $_recognizedText',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.blue,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    FloatingActionButton(
-                      mini: true,
-                      onPressed: _loading ? null : _startListening,
-                      backgroundColor: _listening ? Colors.red : Colors.blue,
-                      child: Icon(_listening ? Icons.mic : Icons.mic_none),
-                    ),
-                    const SizedBox(width: 8),
-                    FloatingActionButton(
-                      mini: true,
-                      onPressed: _loading ? null : _sendMessage,
-                      backgroundColor: const Color.fromARGB(255, 3, 251, 40),
-                      child: _loading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation(
-                                  Colors.black,
+                  if (_recognizedText.isNotEmpty) const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _textController,
+                          decoration: InputDecoration(
+                            hintText: 'Type or speak...',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FloatingActionButton(
+                        mini: true,
+                        onPressed: _loading ? null : _startListening,
+                        backgroundColor: _listening ? Colors.red : Colors.blue,
+                        child: Icon(_listening ? Icons.mic : Icons.mic_none),
+                      ),
+                      const SizedBox(width: 8),
+                      FloatingActionButton(
+                        mini: true,
+                        onPressed: _loading ? null : _sendMessage,
+                        backgroundColor: const Color.fromARGB(255, 3, 251, 40),
+                        child: _loading
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation(
+                                    Colors.black,
+                                  ),
                                 ),
-                              ),
-                            )
-                          : const Icon(Icons.send, color: Colors.black),
-                    ),
-                  ],
-                ),
-              ],
+                              )
+                            : const Icon(Icons.send, color: Colors.black),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    )
     );
   }
 }

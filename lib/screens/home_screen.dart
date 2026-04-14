@@ -1,7 +1,6 @@
 // lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../services/volume_button_service.dart';
@@ -24,78 +23,93 @@ import 'registration.dart';
 // ─── Command → screen mapping (English + Hindi intents) ──────────────────────
 final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   // Read Anything
-  'read'         : ('Read Anything',          () => const ReadAnythingScreen()),
-  'padho'        : ('Read Anything',          () => const ReadAnythingScreen()),
-  'padhna'       : ('Read Anything',          () => const ReadAnythingScreen()),
-  'text'         : ('Read Anything',          () => const ReadAnythingScreen()),
-  'likha'        : ('Read Anything',          () => const ReadAnythingScreen()),
-  'kya likha'    : ('Read Anything',          () => const ReadAnythingScreen()),
+  'read': ('Read Anything', () => const ReadAnythingScreen()),
+  'padho': ('Read Anything', () => const ReadAnythingScreen()),
+  'padhna': ('Read Anything', () => const ReadAnythingScreen()),
+  'text': ('Read Anything', () => const ReadAnythingScreen()),
+  'likha': ('Read Anything', () => const ReadAnythingScreen()),
+  'kya likha': ('Read Anything', () => const ReadAnythingScreen()),
 
   // Currency
-  'currency'     : ('Currency',               () => const CurrencyScreen()),
-  'rupee'        : ('Currency',               () => const CurrencyScreen()),
-  'paisa'        : ('Currency',               () => const CurrencyScreen()),
-  'note'         : ('Currency',               () => const CurrencyScreen()),
-  'money'        : ('Currency',               () => const CurrencyScreen()),
-  'paise'        : ('Currency',               () => const CurrencyScreen()),
-  'rupeyya'     : ('Currency',               () => const CurrencyScreen()),
+  'currency': ('Currency', () => const CurrencyScreen()),
+  'rupee': ('Currency', () => const CurrencyScreen()),
+  'paisa': ('Currency', () => const CurrencyScreen()),
+  'note': ('Currency', () => const CurrencyScreen()),
+  'money': ('Currency', () => const CurrencyScreen()),
+  'paise': ('Currency', () => const CurrencyScreen()),
+  'rupeyya': ('Currency', () => const CurrencyScreen()),
 
   // Navigate
-  'navigate'     : ('Navigate',               () => const NavigateScreen()),
-  'navigation'   : ('Navigate',               () => const NavigateScreen()),
-  'direction'    : ('Navigate',               () => const NavigateScreen()),
-  'rasta'        : ('Navigate',               () => const NavigateScreen()),
-  'raasta'       : ('Navigate',               () => const NavigateScreen()),
-  'jana hai'     : ('Navigate',               () => const NavigateScreen()),
+  'navigate': ('Navigate', () => const NavigateScreen()),
+  'navigation': ('Navigate', () => const NavigateScreen()),
+  'direction': ('Navigate', () => const NavigateScreen()),
+  'rasta': ('Navigate', () => const NavigateScreen()),
+  'raasta': ('Navigate', () => const NavigateScreen()),
+  'jana hai': ('Navigate', () => const NavigateScreen()),
 
   // Object Recognition
-  'object'       : ('Object Recognition',     () => const ObjectRecognitionScreen()),
-  'recognize'    : ('Object Recognition',     () => const ObjectRecognitionScreen()),
-  'objects'      : ('Object Recognition',     () => const ObjectRecognitionScreen()),
-  'cheez'        : ('Object Recognition',     () => const ObjectRecognitionScreen()),
-  'kya hai'      : ('Object Recognition',     () => const ObjectRecognitionScreen()),
+  'object': ('Object Recognition', () => const ObjectRecognitionScreen()),
+  'recognize': ('Object Recognition', () => const ObjectRecognitionScreen()),
+  'objects': ('Object Recognition', () => const ObjectRecognitionScreen()),
+  'cheez': ('Object Recognition', () => const ObjectRecognitionScreen()),
+  'kya hai': ('Object Recognition', () => const ObjectRecognitionScreen()),
 
   // Scene Captioning
-  'scene'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
-  'caption'      : ('Scene Captioning',       () => const SceneCaptioningScreen()),
-  'describe'     : ('Scene Captioning',       () => const SceneCaptioningScreen()),
-  'description'  : ('Scene Captioning',       () => const SceneCaptioningScreen()),
-  'samne'        : ('Scene Captioning',       () => const SceneCaptioningScreen()),
-  'kya ho rha hai': ('Scene Captioning',       () => const SceneCaptioningScreen()),
+  'scene': ('Scene Captioning', () => const SceneCaptioningScreen()),
+  'caption': ('Scene Captioning', () => const SceneCaptioningScreen()),
+  'describe': ('Scene Captioning', () => const SceneCaptioningScreen()),
+  'description': ('Scene Captioning', () => const SceneCaptioningScreen()),
+  'samne': ('Scene Captioning', () => const SceneCaptioningScreen()),
+  'kya ho rha hai': ('Scene Captioning', () => const SceneCaptioningScreen()),
 
   // Person Identification
-  'person'       : ('Person Identification',  () => const PersonIdentificationScreen()),
-  'identify'     : ('Person Identification',  () => const PersonIdentificationScreen()),
-  'face'         : ('Person Identification',  () => const PersonIdentificationScreen()),
-  'kaun'         : ('Person Identification',  () => const PersonIdentificationScreen()),
-  'kon hai'      : ('Person Identification',  () => const PersonIdentificationScreen()),
-  'pehchano'     : ('Person Identification',  () => const PersonIdentificationScreen()),
-  'aadmi kaun hai': ('Person Identification',  () => const PersonIdentificationScreen()),
-  'aurat kaun hai': ('Person Identification',  () => const PersonIdentificationScreen()),
-  
+  'person': ('Person Identification', () => const PersonIdentificationScreen()),
+  'identify': (
+    'Person Identification',
+    () => const PersonIdentificationScreen(),
+  ),
+  'face': ('Person Identification', () => const PersonIdentificationScreen()),
+  'kaun': ('Person Identification', () => const PersonIdentificationScreen()),
+  'kon hai': (
+    'Person Identification',
+    () => const PersonIdentificationScreen(),
+  ),
+  'pehchano': (
+    'Person Identification',
+    () => const PersonIdentificationScreen(),
+  ),
+  'aadmi kaun hai': (
+    'Person Identification',
+    () => const PersonIdentificationScreen(),
+  ),
+  'aurat kaun hai': (
+    'Person Identification',
+    () => const PersonIdentificationScreen(),
+  ),
+
   // Color
-  'color'        : ('Color',                  () => const ColorScreen()),
-  'colour'       : ('Color',                  () => const ColorScreen()),
-  'rang'         : ('Color',                  () => const ColorScreen()),
-  'kaunsa rang'  : ('Color',                  () => const ColorScreen()),
+  'color': ('Color', () => const ColorScreen()),
+  'colour': ('Color', () => const ColorScreen()),
+  'rang': ('Color', () => const ColorScreen()),
+  'kaunsa rang': ('Color', () => const ColorScreen()),
 
   // Talk with Voluntary
-  'talk'         : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
-  'voluntary'    : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
-  'volunteer'    : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
-  'madad'        : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
-  'sahayata'     : ('Talk with Volunteer',    () => const TalkWithVoluntaryScreen()),
+  'talk': ('Talk with Volunteer', () => const TalkWithVoluntaryScreen()),
+  'voluntary': ('Talk with Volunteer', () => const TalkWithVoluntaryScreen()),
+  'volunteer': ('Talk with Volunteer', () => const TalkWithVoluntaryScreen()),
+  'madad': ('Talk with Volunteer', () => const TalkWithVoluntaryScreen()),
+  'sahayata': ('Talk with Volunteer', () => const TalkWithVoluntaryScreen()),
 
   // AI Buddy
-  'buddy'        : ('AI Buddy',               () => const AIBuddyScreen()),
-  'chat'         : ('AI Buddy',               () => const AIBuddyScreen()),
-  'baat'         : ('AI Buddy',               () => const AIBuddyScreen()),
-  'timepass'     : ('AI Buddy',               () => const AIBuddyScreen()),
+  'buddy': ('AI Buddy', () => const AIBuddyScreen()),
+  'chat': ('AI Buddy', () => const AIBuddyScreen()),
+  'baat': ('AI Buddy', () => const AIBuddyScreen()),
+  'timepass': ('AI Buddy', () => const AIBuddyScreen()),
 
   // Emergency
-  'emergency'    : ('Emergency',              () => const EmergencyScreen()),
-  'bachao'       : ('Emergency',              () => const EmergencyScreen()),
-  'call'      : ('Emergency',              () => const EmergencyScreen()),
+  'emergency': ('Emergency', () => const EmergencyScreen()),
+  'bachao': ('Emergency', () => const EmergencyScreen()),
+  'call': ('Emergency', () => const EmergencyScreen()),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,12 +122,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final VolumeButtonService _volService  = VolumeButtonService();
-  final TtsService          _tts         = TtsService();
-  final stt.SpeechToText    _speech      = stt.SpeechToText();
+  final VolumeButtonService _volService = VolumeButtonService();
+  final TtsService _tts = TtsService();
+  final stt.SpeechToText _speech = stt.SpeechToText();
 
-  bool _sttReady    = false;
-  bool _listening   = false;
+  bool _sttReady = false;
+  bool _listening = false;
 
   @override
   void initState() {
@@ -179,8 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (result.finalResult) {
           setState(() => _listening = false);
           if (words.isEmpty) {
-            await _tts.speak(
-                'I did not hear anything. Press volume up again.');
+            await _tts.speak('I did not hear anything. Press volume up again.');
           } else {
             await _handleCommand(words);
           }
@@ -203,18 +216,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
     String? matchedKey;
     for (final key in _cmdMap.keys) {
-      if (words.contains(key)) { matchedKey = key; break; }
+      if (words.contains(key)) {
+        matchedKey = key;
+        break;
+      }
     }
 
     if (matchedKey == null) {
       if (isHindi) {
         await _tts.speak(
-            'माफ कीजिए, मुझे समझ नहीं आया। '
-            'वॉल्यूम अप दबाकर फिर से बोलें।');
+          'माफ कीजिए, मुझे समझ नहीं आया। '
+          'वॉल्यूम अप दबाकर फिर से बोलें।',
+        );
       } else {
         await _tts.speak(
-            'Sorry, I did not understand. '
-            'Press volume up again and say a feature name.');
+          'Sorry, I did not understand. '
+          'Press volume up again and say a feature name.',
+        );
       }
       return;
     }
@@ -228,16 +246,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (!mounted) return;
-    await Navigator.push(
-        context, MaterialPageRoute(builder: (_) => builder()));
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => builder()));
 
     if (mounted) {
       if (isHindi) {
         await _tts.speak(
-            'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।');
+          'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।',
+        );
       } else {
-        await _tts.speak(
-            'Back to home. Press volume up to open a feature.');
+        await _tts.speak('Back to home. Press volume up to open a feature.');
       }
     }
   }
@@ -257,27 +274,84 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final options = [
-      MenuOption('Read Anything',         Icons.book,                  const Color(0xFF03998A), const ReadAnythingScreen()),
-      MenuOption('Currency',              Icons.attach_money,           Colors.deepPurple,        const CurrencyScreen()),
-      MenuOption('Navigate',              Icons.navigation,             Colors.indigo,            const NavigateScreen()),
-      MenuOption('Object Recognition',    Icons.search,                 Colors.green,             const ObjectRecognitionScreen()),
-      MenuOption('Scene Captioning',      Icons.camera_alt,             const Color(0xFF018E55),  const SceneCaptioningScreen()),
-      MenuOption('Person Identification', Icons.tag_faces_outlined,     const Color(0xFFCFB067),  const PersonIdentificationScreen()),
-      MenuOption('Color',                 Icons.color_lens,             const Color(0xFF1E79E9),  const ColorScreen()),
-      MenuOption('Talk with Volunteer',   Icons.phone_in_talk_rounded,  const Color(0xFF8E4925),  const TalkWithVoluntaryScreen()),
-      MenuOption('AI Buddy',              Icons.chat_outlined,          const Color(0xFF69761E),  const AIBuddyScreen()),
-      MenuOption('Emergency',             Icons.emoji_people_rounded,   Colors.red,               const EmergencyScreen()),
+      MenuOption(
+        'Read Anything',
+        Icons.book,
+        const Color(0xFF03998A),
+        const ReadAnythingScreen(),
+      ),
+      MenuOption(
+        'Currency',
+        Icons.attach_money,
+        Colors.deepPurple,
+        const CurrencyScreen(),
+      ),
+      MenuOption(
+        'Navigate',
+        Icons.navigation,
+        Colors.indigo,
+        const NavigateScreen(),
+      ),
+      MenuOption(
+        'Object Recognition',
+        Icons.search,
+        Colors.green,
+        const ObjectRecognitionScreen(),
+      ),
+      MenuOption(
+        'Scene Captioning',
+        Icons.camera_alt,
+        const Color(0xFF018E55),
+        const SceneCaptioningScreen(),
+      ),
+      MenuOption(
+        'Person Identification',
+        Icons.tag_faces_outlined,
+        const Color(0xFFCFB067),
+        const PersonIdentificationScreen(),
+      ),
+      MenuOption(
+        'Color',
+        Icons.color_lens,
+        const Color(0xFF1E79E9),
+        const ColorScreen(),
+      ),
+      MenuOption(
+        'Talk with Volunteer',
+        Icons.phone_in_talk_rounded,
+        const Color(0xFF8E4925),
+        const TalkWithVoluntaryScreen(),
+      ),
+      MenuOption(
+        'AI Buddy',
+        Icons.chat_outlined,
+        const Color(0xFF69761E),
+        const AIBuddyScreen(),
+      ),
+      MenuOption(
+        'Emergency',
+        Icons.emoji_people_rounded,
+        Colors.red,
+        const EmergencyScreen(),
+      ),
     ];
 
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Row(mainAxisSize: MainAxisSize.min, children: [
-          Image.asset('images/logo.png', width: 80, height: 80,
-              errorBuilder: (_, __, ___) => const SizedBox.shrink()),
-          const SizedBox(width: 8),
-          Text('Life Lens', style: Theme.of(context).textTheme.headlineSmall),
-        ]),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(
+              'images/logo.png',
+              width: 80,
+              height: 80,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
+            const SizedBox(width: 8),
+            Text('Life Lens', style: Theme.of(context).textTheme.headlineSmall),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
@@ -292,40 +366,43 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               );
               await _tts.speak(
-                  'Back to home. Press volume up to open a feature.');
+                'Back to home. Press volume up to open a feature.',
+              );
             },
           ),
         ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(30),
-        child: Column(children: [
-          Text('Welcome ${widget.title}'),
-          const SizedBox(height: 8),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 300),
-            child: Text(
-              _listening
-                  ? '🎤 Listening… say a feature name'
-                  : 'Press Volume Up to open a feature',
-              key: ValueKey(_listening),
-              style: TextStyle(
-                fontSize: 15,
-                color: _listening ? Colors.deepPurple : Colors.black87,
-                fontWeight: _listening ? FontWeight.w600 : FontWeight.normal,
+        child: Column(
+          children: [
+            Text('Welcome ${widget.title}'),
+            const SizedBox(height: 8),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: Text(
+                _listening
+                    ? '🎤 Listening… say a feature name'
+                    : 'Press Volume Up to open a feature',
+                key: ValueKey(_listening),
+                style: TextStyle(
+                  fontSize: 15,
+                  color: _listening ? Colors.deepPurple : Colors.black87,
+                  fontWeight: _listening ? FontWeight.w600 : FontWeight.normal,
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 10),
-          Expanded(
-            child: GridView.count(
-              crossAxisCount: 2,
-              crossAxisSpacing: 20,
-              mainAxisSpacing: 20,
-              children: options.map((o) => MenuCard(option: o)).toList(),
+            const SizedBox(height: 10),
+            Expanded(
+              child: GridView.count(
+                crossAxisCount: 2,
+                crossAxisSpacing: 20,
+                mainAxisSpacing: 20,
+                children: options.map((o) => MenuCard(option: o)).toList(),
+              ),
             ),
-          ),
-        ]),
+          ],
+        ),
       ),
     );
   }
