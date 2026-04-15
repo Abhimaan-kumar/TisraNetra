@@ -60,55 +60,83 @@ class FcmService {
     if (token != null) await _saveToken(token);
   }
 
+  // ─── Pending message for cold-start ─────────────────────
+  RemoteMessage? _pendingMessage;
+
+  /// Call from SplashScreen / HomeScreen after navigation is settled.
+  void checkPendingNotification() {
+    if (_pendingMessage != null) {
+      final msg = _pendingMessage!;
+      _pendingMessage = null;
+      _showIncomingCallDialog(msg);
+    }
+  }
+
+  // ─────────────── show dialog helper ─────────────────────
+  Future<void> _showIncomingCallDialog(RemoteMessage message) async {
+    final data = message.data;
+    final type = data['type'];
+    if (type != 'help_request') return;
+
+    final requestId = data['requestId'] ?? '';
+    final clientName = data['clientName'] ?? 'A client';
+
+    // Wait for navigator to be available (up to 10 seconds)
+    int retries = 0;
+    while (navigatorKey.currentState == null && retries < 20) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      retries++;
+    }
+
+    if (navigatorKey.currentState == null) {
+      debugPrint('[FCM] Navigator not ready — storing as pending');
+      _pendingMessage = message;
+      return;
+    }
+
+    // Use addPostFrameCallback to ensure we're not in a build phase
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final nav = navigatorKey.currentState;
+      if (nav == null) return;
+
+      try {
+        showDialog(
+          context: nav.context,
+          barrierDismissible: false,
+          builder: (dialogCtx) => AlertDialog(
+            title: const Text('Help Request'),
+            content: Text('$clientName needs your help. Accept the call?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(), // reject
+                child: const Text('Reject'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(dialogCtx).pop();
+                  _acceptHelpRequest(requestId);
+                },
+                child: const Text('Accept'),
+              ),
+            ],
+          ),
+        );
+      } catch (e) {
+        debugPrint('[FCM] Error showing dialog: $e');
+      }
+    });
+  }
+
   // ─────────────── foreground handler ────────────────────
   void _handleForegroundMessage(RemoteMessage message) {
     debugPrint('[FCM] Foreground message: ${message.data}');
-
-    final ctx = navigatorKey.currentContext;
-    if (ctx == null) return;
-
-    final data = message.data;
-    final type = data['type'];
-
-    if (type == 'help_request') {
-      final requestId = data['requestId'] ?? '';
-      final clientName = data['clientName'] ?? 'A client';
-
-      // Show an in-app dialog for volunteer to accept / reject
-      showDialog(
-        context: ctx,
-        barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          title: const Text('Help Request'),
-          content: Text('$clientName needs your help. Accept the call?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(), // reject
-              child: const Text('Reject'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                _acceptHelpRequest(requestId);
-              },
-              child: const Text('Accept'),
-            ),
-          ],
-        ),
-      );
-    }
+    _showIncomingCallDialog(message);
   }
 
   // ────────────── notification tap handler ────────────────
   void _handleNotificationTap(RemoteMessage message) {
     debugPrint('[FCM] Notification tapped: ${message.data}');
-    final data = message.data;
-    final type = data['type'];
-
-    if (type == 'help_request') {
-      final requestId = data['requestId'] ?? '';
-      _acceptHelpRequest(requestId);
-    }
+    _showIncomingCallDialog(message);
   }
 
   // ──────────────── accept a help_request ─────────────────

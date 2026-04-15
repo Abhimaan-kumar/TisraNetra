@@ -4,8 +4,10 @@ import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:google_fonts/google_fonts.dart';
 import '../services/tts_service.dart';
 import '../services/volume_button_service.dart';
+import '../theme/app_theme.dart';
 import 'registration.dart';
 import 'profile_screen.dart';
 
@@ -280,160 +282,380 @@ Rules:
         }
       },
       child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Time pass with AI buddy'),
-          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.person),
-              onPressed: () async {
-                final user = FirebaseAuth.instance.currentUser;
-                if (user == null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const RegistrationScreen(),
-                    ),
-                  );
-                  return;
-                }
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                );
-              },
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            Expanded(
-              child: _messages.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.chat_outlined,
-                            size: 64,
-                            color: const Color.fromARGB(255, 105, 118, 30),
+        body: Container(
+          decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+          child: SafeArea(
+            child: Column(
+              children: [
+                // ── Premium Header ─────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 20, vertical: 14),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => Navigator.pop(context),
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: AppTheme.surface,
+                            borderRadius: BorderRadius.circular(14),
+                            border:
+                                Border.all(color: AppTheme.cardBorder),
                           ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Start a conversation',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
+                          child: const Icon(Icons.arrow_back_ios_new,
+                              color: AppTheme.textSecondary, size: 18),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [
+                              Color(0xFF7D8C2E),
+                              Color(0xFF566420),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.chat_outlined,
+                            color: Colors.white, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Time pass with AI buddy',
+                                style: GoogleFonts.inter(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
+                                )),
+                            Text(
+                              _listening ? '🎤 Listening…' : 'Voice-enabled chat',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                color: AppTheme.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () async {
+                          final user =
+                              FirebaseAuth.instance.currentUser;
+                          if (user == null) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    const RegistrationScreen(),
+                              ),
+                            );
+                            return;
+                          }
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const ProfileScreen()),
+                          );
+                        },
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: AppTheme.surface,
+                            borderRadius: BorderRadius.circular(14),
+                            border:
+                                Border.all(color: AppTheme.cardBorder),
+                          ),
+                          child: const Icon(
+                              Icons.person_outline_rounded,
+                              color: AppTheme.textSecondary,
+                              size: 22),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ── Chat Messages ─────────────────────────────────
+                Expanded(
+                  child: _messages.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment:
+                                MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 80,
+                                height: 80,
+                                decoration: BoxDecoration(
+                                  color: AppTheme.accent
+                                      .withOpacity(0.1),
+                                  borderRadius:
+                                      BorderRadius.circular(24),
+                                  border: Border.all(
+                                    color: AppTheme.accent
+                                        .withOpacity(0.2),
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.chat_outlined,
+                                  size: 40,
+                                  color: AppTheme.accent,
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Text(
+                                'Start a conversation',
+                                style: GoogleFonts.inter(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Speak or type your message',
+                                style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          itemCount: _messages.length,
+                          itemBuilder: (context, index) {
+                            final msg = _messages[index];
+                            return Align(
+                              alignment: msg.fromUser
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: Container(
+                                margin:
+                                    const EdgeInsets.symmetric(
+                                        vertical: 4),
+                                padding:
+                                    const EdgeInsets.all(14),
+                                constraints: BoxConstraints(
+                                  maxWidth:
+                                      MediaQuery.of(context)
+                                              .size
+                                              .width *
+                                          0.78,
+                                ),
+                                decoration: BoxDecoration(
+                                  gradient: msg.fromUser
+                                      ? AppTheme.accentGradient
+                                      : null,
+                                  color: msg.fromUser
+                                      ? null
+                                      : AppTheme.card,
+                                  borderRadius:
+                                      BorderRadius.only(
+                                    topLeft:
+                                        const Radius.circular(
+                                            18),
+                                    topRight:
+                                        const Radius.circular(
+                                            18),
+                                    bottomLeft: Radius.circular(
+                                        msg.fromUser
+                                            ? 18
+                                            : 4),
+                                    bottomRight:
+                                        Radius.circular(
+                                            msg.fromUser
+                                                ? 4
+                                                : 18),
+                                  ),
+                                  border: msg.fromUser
+                                      ? null
+                                      : Border.all(
+                                          color: AppTheme
+                                              .cardBorder
+                                              .withOpacity(
+                                                  0.5)),
+                                ),
+                                child: Text(
+                                  msg.text,
+                                  style: GoogleFonts.inter(
+                                    color: msg.fromUser
+                                        ? Colors.white
+                                        : AppTheme
+                                            .textPrimary,
+                                    fontSize: 14,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+
+                // ── Input Area ─────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.fromLTRB(
+                      16, 10, 16, 16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surface.withOpacity(0.8),
+                    border: Border(
+                      top: BorderSide(
+                        color: AppTheme.divider,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      if (_recognizedText.isNotEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          margin:
+                              const EdgeInsets.only(bottom: 8),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accent
+                                .withOpacity(0.1),
+                            borderRadius:
+                                BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppTheme.accent
+                                  .withOpacity(0.3),
+                            ),
+                          ),
+                          child: Text(
+                            'Heard: $_recognizedText',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: AppTheme.accentLight,
+                            ),
+                          ),
+                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: AppTheme.card,
+                                borderRadius:
+                                    BorderRadius.circular(24),
+                                border: Border.all(
+                                    color: AppTheme.cardBorder),
+                              ),
+                              child: TextField(
+                                controller: _textController,
+                                style: GoogleFonts.inter(
+                                    color:
+                                        AppTheme.textPrimary),
+                                decoration: InputDecoration(
+                                  hintText:
+                                      'Type or speak...',
+                                  hintStyle: GoogleFonts.inter(
+                                      color: AppTheme
+                                          .textSecondary),
+                                  border: InputBorder.none,
+                                  enabledBorder:
+                                      InputBorder.none,
+                                  focusedBorder:
+                                      InputBorder.none,
+                                  contentPadding:
+                                      const EdgeInsets
+                                          .symmetric(
+                                    horizontal: 20,
+                                    vertical: 14,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Mic button
+                          GestureDetector(
+                            onTap: _loading
+                                ? null
+                                : _startListening,
+                            child: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: _listening
+                                    ? AppTheme.red
+                                        .withOpacity(0.15)
+                                    : AppTheme.surface,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: _listening
+                                      ? AppTheme.red
+                                      : AppTheme.cardBorder,
+                                ),
+                              ),
+                              child: Icon(
+                                _listening
+                                    ? Icons.mic
+                                    : Icons.mic_none,
+                                color: _listening
+                                    ? AppTheme.red
+                                    : AppTheme.textSecondary,
+                                size: 22,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Send button
+                          GestureDetector(
+                            onTap: _loading
+                                ? null
+                                : _sendMessage,
+                            child: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                gradient:
+                                    AppTheme.accentGradient,
+                                shape: BoxShape.circle,
+                                boxShadow:
+                                    AppTheme.glowShadow(
+                                  AppTheme.accent,
+                                  blur: 10,
+                                ),
+                              ),
+                              child: _loading
+                                  ? const Padding(
+                                      padding:
+                                          EdgeInsets.all(12),
+                                      child:
+                                          CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.send,
+                                      color: Colors.white,
+                                      size: 20),
                             ),
                           ),
                         ],
                       ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = _messages[index];
-                        return Align(
-                          alignment: msg.fromUser
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.all(8),
-                            padding: const EdgeInsets.all(12),
-                            constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.of(context).size.width * 0.75,
-                            ),
-                            decoration: BoxDecoration(
-                              color: msg.fromUser
-                                  ? const Color.fromARGB(255, 3, 251, 40)
-                                  : Colors.grey[300],
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              msg.text,
-                              style: TextStyle(
-                                color: msg.fromUser
-                                    ? Colors.black
-                                    : Colors.black,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            Container(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  if (_recognizedText.isNotEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.blue[100],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        'Heard: $_recognizedText',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.blue,
-                        ),
-                      ),
-                    ),
-                  if (_recognizedText.isNotEmpty) const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _textController,
-                          decoration: InputDecoration(
-                            hintText: 'Type or speak...',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      FloatingActionButton(
-                        mini: true,
-                        onPressed: _loading ? null : _startListening,
-                        backgroundColor: _listening ? Colors.red : Colors.blue,
-                        child: Icon(_listening ? Icons.mic : Icons.mic_none),
-                      ),
-                      const SizedBox(width: 8),
-                      FloatingActionButton(
-                        mini: true,
-                        onPressed: _loading ? null : _sendMessage,
-                        backgroundColor: const Color.fromARGB(255, 3, 251, 40),
-                        child: _loading
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation(
-                                    Colors.black,
-                                  ),
-                                ),
-                              )
-                            : const Icon(Icons.send, color: Colors.black),
-                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

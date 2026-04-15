@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'screens/splash_screen.dart';
 import 'screens/video_call_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'firebase_options.dart';
 import 'services/fcm_service.dart';
+import 'theme/app_theme.dart';
 
 
 void main() async {
@@ -21,6 +23,14 @@ void main() async {
     debugPrint('FCM Init error: $e');
   });
 
+  // Immersive system UI for premium feel
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: AppTheme.bg,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
+
   runApp(const MyApp());
 }
 
@@ -32,10 +42,8 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       navigatorKey: FcmService.navigatorKey,
       title: 'Life Lens',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 3, 251, 40)),
-        useMaterial3: true,
-      ),
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.darkTheme,
       home: const SplashScreen(),
       // Named route used by FcmService to navigate volunteers to video call
       onGenerateRoute: (settings) {

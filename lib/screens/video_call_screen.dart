@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/signaling_service.dart';
+import '../theme/app_theme.dart';
 
 /// Full-screen video call screen.
 ///
@@ -84,7 +85,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AppTheme.bg,
       body: Stack(
         children: [
           // ─── Main video feed ───────────────────────────────
@@ -233,7 +234,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                       width: 56,
                       height: 56,
                       decoration: BoxDecoration(
-                        color: _isFlashlightOn ? Colors.yellow : Colors.grey[800],
+                        color: _isFlashlightOn ? Colors.yellow : AppTheme.card,
                         shape: BoxShape.circle,
                       ),
                       child: Icon(

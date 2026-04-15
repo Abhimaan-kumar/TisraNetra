@@ -1,10 +1,13 @@
 // lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../services/volume_button_service.dart';
 import '../services/tts_service.dart';
+import '../services/fcm_service.dart';
+import '../theme/app_theme.dart';
 import 'profile_screen.dart';
 import '../widgets/menu_option.dart';
 import '../widgets/menu_card.dart';
@@ -135,6 +138,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _initStt();
     _setupVolume();
     _welcome();
+
+    // Check for any pending notification from cold-start
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      FcmService().checkPendingNotification();
+    });
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────────
@@ -337,73 +345,190 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset(
-              'images/logo.png',
-              width: 80,
-              height: 80,
-              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-            ),
-            const SizedBox(width: 8),
-            Text('Life Lens', style: Theme.of(context).textTheme.headlineSmall),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person),
-            onPressed: () async {
-              final user = FirebaseAuth.instance.currentUser;
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => user == null
-                      ? const RegistrationScreen()
-                      : const ProfileScreen(),
+      backgroundColor: AppTheme.splashbg,
+      body: SafeArea(
+          child: Column(
+            children: [
+              // ── Premium Header ─────────────────────────────────
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                child: Row(
+                  children: [
+                    // Logo
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: AppTheme.glowShadow(
+                          AppTheme.accent,
+                          blur: 12,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: Image.asset(
+                          'images/logo.png',
+                          width: 48,
+                          height: 48,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            decoration: BoxDecoration(
+                              gradient: AppTheme.accentGradient,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(Icons.visibility,
+                                color: Colors.white, size: 24),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Life Lens',
+                            style: GoogleFonts.inter(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.black87,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          Text(
+                            'Welcome${widget.title}',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: Colors.black54,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Profile button
+                    GestureDetector(
+                      onTap: () async {
+                        final user = FirebaseAuth.instance.currentUser;
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => user == null
+                                ? const RegistrationScreen()
+                                : const ProfileScreen(),
+                          ),
+                        );
+                        await _tts.speak(
+                          'Back to home. Press volume up to open a feature.',
+                        );
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.grey.shade300,
+                            width: 1,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(Icons.person_outline_rounded,
+                            color: Colors.black87, size: 24),
+                      ),
+                    ),
+                  ],
                 ),
-              );
-              await _tts.speak(
-                'Back to home. Press volume up to open a feature.',
-              );
-            },
+              ),
+
+              // ── Listening indicator ─────────────────────────────
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Container(
+                  key: ValueKey(_listening),
+                  margin: const EdgeInsets.symmetric(horizontal: 24),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _listening
+                        ? AppTheme.accent.withOpacity(0.12)
+                        : Colors.white,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                    border: Border.all(
+                      color: _listening
+                          ? AppTheme.accent.withOpacity(0.4)
+                          : Colors.grey.shade300,
+                    ),
+                    boxShadow: [
+                      if (!_listening)
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.03),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        _listening ? Icons.mic : Icons.volume_up_rounded,
+                        size: 16,
+                        color: _listening
+                            ? AppTheme.accent
+                            : Colors.black54,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _listening
+                            ? '🎤 Listening… say a feature name'
+                            : 'Press Volume Up to open a feature',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          color: _listening
+                              ? AppTheme.accent
+                              : Colors.black87,
+                          fontWeight:
+                              _listening ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // ── Menu Grid ─────────────────────────────────────
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: GridView.count(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: 1.05,
+                    children: List.generate(
+                      options.length,
+                      (i) => MenuCard(option: options[i], index: i),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(30),
-        child: Column(
-          children: [
-            Text('Welcome ${widget.title}'),
-            const SizedBox(height: 8),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              child: Text(
-                _listening
-                    ? '🎤 Listening… say a feature name'
-                    : 'Press Volume Up to open a feature',
-                key: ValueKey(_listening),
-                style: TextStyle(
-                  fontSize: 15,
-                  color: _listening ? Colors.deepPurple : Colors.black87,
-                  fontWeight: _listening ? FontWeight.w600 : FontWeight.normal,
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: GridView.count(
-                crossAxisCount: 2,
-                crossAxisSpacing: 20,
-                mainAxisSpacing: 20,
-                children: options.map((o) => MenuCard(option: o)).toList(),
-              ),
-            ),
-          ],
         ),
-      ),
-    );
+      );
+    
   }
 }

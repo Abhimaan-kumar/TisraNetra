@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../services/tts_service.dart';
 import '../services/volume_button_service.dart';
+import '../theme/app_theme.dart';
 import 'profile_screen.dart';
 import 'registration.dart';
 import 'video_call_screen.dart';
@@ -118,148 +120,287 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Talk with Volunteer'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person),
-            onPressed: () async {
-              final user = FirebaseAuth.instance.currentUser;
-              if (user == null) {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const RegistrationScreen()),
-                );
-                return;
-              }
-              // If logged in, open Profile screen
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              );
-            },
-          ),
-        ],
-        
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const SizedBox(height: 24),
-            Icon(
-              Icons.phone_in_talk_rounded,
-              size: 80,
-              color: const Color.fromARGB(255, 142, 73, 37),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Talk with a Human Volunteer',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Tap the button below to request live help.\n'
-              'The first available volunteer will connect and see your camera feed.',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 32),
-            if (_currentRequestId == null)
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.phone),
-                  label: Text(_creatingRequest ? 'Requesting help...' : 'Call a Volunteer'),
-                  onPressed: _creatingRequest ? null : _createHelpRequest,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    backgroundColor: const Color.fromARGB(255, 142, 73, 37),
-                    foregroundColor: Colors.white,
-                    textStyle: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+      body: Container(
+        decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+        child: SafeArea(
+          child: Column(
+            children: [
+              // Header
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 20, vertical: 14),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: AppTheme.surface,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: AppTheme.cardBorder),
+                        ),
+                        child: const Icon(Icons.arrow_back_ios_new,
+                            color: AppTheme.textSecondary, size: 18),
+                      ),
                     ),
-                  ),
-                ),
-              )
-            else
-              Expanded(
-                child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                  stream: _helpRequests.doc(_currentRequestId).snapshots(),
-                  builder: (context, snapshot) {
-                    if (!snapshot.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (!snapshot.data!.exists) {
-                      return Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text('Request ended'),
-                          const SizedBox(height: 12),
-                          ElevatedButton(
-                            onPressed: () =>
-                                setState(() => _currentRequestId = null),
-                            child: const Text('Back'),
-                          ),
-                        ],
-                      );
-                    }
-
-                    final data = snapshot.data!.data() ?? {};
-                    final status = (data['status'] ?? 'pending') as String;
-
-                    // ── Navigate to video call when accepted ──
-                    if (status == 'accepted') {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        final requestId = _currentRequestId;
-                        if (requestId == null || !mounted) return;
-                        // Clear so we don't double-navigate
-                        _currentRequestId = null;
-                        Navigator.pushReplacement(
+                    const SizedBox(width: 14),
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFCA6F1E), Color(0xFF935116)],
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.phone_in_talk_rounded,
+                          color: Colors.white, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text('Talk with Volunteer',
+                          style: GoogleFonts.inter(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary,
+                          )),
+                    ),
+                    GestureDetector(
+                      onTap: () async {
+                        final user = FirebaseAuth.instance.currentUser;
+                        if (user == null) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const RegistrationScreen()),
+                          );
+                          return;
+                        }
+                        Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => VideoCallScreen(
-                              role: 'client',
-                              requestId: requestId,
-                            ),
-                          ),
+                              builder: (_) => const ProfileScreen()),
                         );
-                      });
-                    }
-
-                    String statusText;
-                    if (status == 'pending') {
-                      statusText =
-                          'Waiting for a volunteer to accept your request...';
-                    } else if (status == 'accepted') {
-                      statusText = 'Connecting to volunteer...';
-                    } else if (status == 'cancelled') {
-                      statusText = 'Request cancelled.';
-                    } else {
-                      statusText = 'Request ended.';
-                    }
-
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const SizedBox(height: 24),
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(statusText, textAlign: TextAlign.center),
-                        const SizedBox(height: 24),
-                        TextButton.icon(
-                          icon: const Icon(Icons.cancel),
-                          label: const Text('Cancel request'),
-                          onPressed: _cancelRequest,
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: AppTheme.surface,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: AppTheme.cardBorder),
                         ),
-                      ],
-                    );
-                  },
+                        child: const Icon(Icons.person_outline_rounded,
+                            color: AppTheme.textSecondary, size: 22),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-          ],
+              // Body
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 32),
+                      // Icon
+                      Container(
+                        width: 100,
+                        height: 100,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFCA6F1E), Color(0xFF935116)],
+                          ),
+                          borderRadius: BorderRadius.circular(28),
+                          boxShadow: [
+                            BoxShadow(
+                              color:
+                                  const Color(0xFFCA6F1E).withOpacity(0.3),
+                              blurRadius: 24,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(Icons.phone_in_talk_rounded,
+                            size: 48, color: Colors.white),
+                      ),
+                      const SizedBox(height: 24),
+                      Text(
+                        'Talk with a Human Volunteer',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Tap the button below to request live help.\n'
+                        'The first available volunteer will connect and see your camera feed.',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          color: AppTheme.textSecondary,
+                          height: 1.5,
+                        ),
+                      ),
+                      const SizedBox(height: 36),
+                      if (_currentRequestId == null)
+                        SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.phone, size: 22),
+                            label: Text(
+                              _creatingRequest
+                                  ? 'Requesting help...'
+                                  : 'Call a Volunteer',
+                              style: GoogleFonts.inter(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            onPressed:
+                                _creatingRequest ? null : _createHelpRequest,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFCA6F1E),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(
+                                    AppTheme.radiusMd),
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        Expanded(
+                          child: StreamBuilder<
+                              DocumentSnapshot<Map<String, dynamic>>>(
+                            stream: _helpRequests
+                                .doc(_currentRequestId)
+                                .snapshots(),
+                            builder: (context, snapshot) {
+                              if (!snapshot.hasData) {
+                                return const Center(
+                                    child: CircularProgressIndicator(
+                                        color: AppTheme.accent));
+                              }
+                              if (!snapshot.data!.exists) {
+                                return Column(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.center,
+                                  children: [
+                                    Text('Request ended',
+                                        style: GoogleFonts.inter(
+                                            color:
+                                                AppTheme.textSecondary)),
+                                    const SizedBox(height: 12),
+                                    ElevatedButton(
+                                      onPressed: () => setState(
+                                          () => _currentRequestId = null),
+                                      child: const Text('Back'),
+                                    ),
+                                  ],
+                                );
+                              }
+
+                              final data =
+                                  snapshot.data!.data() ?? {};
+                              final status =
+                                  (data['status'] ?? 'pending')
+                                      as String;
+
+                              // ── Navigate to video call when accepted ──
+                              if (status == 'accepted') {
+                                WidgetsBinding.instance
+                                    .addPostFrameCallback((_) {
+                                  final requestId =
+                                      _currentRequestId;
+                                  if (requestId == null ||
+                                      !mounted) return;
+                                  // Clear so we don't double-navigate
+                                  _currentRequestId = null;
+                                  Navigator.pushReplacement(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          VideoCallScreen(
+                                        role: 'client',
+                                        requestId: requestId,
+                                      ),
+                                    ),
+                                  );
+                                });
+                              }
+
+                              String statusText;
+                              if (status == 'pending') {
+                                statusText =
+                                    'Waiting for a volunteer to accept your request...';
+                              } else if (status == 'accepted') {
+                                statusText =
+                                    'Connecting to volunteer...';
+                              } else if (status == 'cancelled') {
+                                statusText =
+                                    'Request cancelled.';
+                              } else {
+                                statusText = 'Request ended.';
+                              }
+
+                              return Column(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.center,
+                                children: [
+                                  const SizedBox(height: 24),
+                                  SizedBox(
+                                    width: 40,
+                                    height: 40,
+                                    child:
+                                        CircularProgressIndicator(
+                                      color: AppTheme.accent,
+                                      strokeWidth: 3,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                  Text(statusText,
+                                      textAlign:
+                                          TextAlign.center,
+                                      style: GoogleFonts.inter(
+                                        color: AppTheme
+                                            .textSecondary,
+                                        height: 1.4,
+                                      )),
+                                  const SizedBox(height: 24),
+                                  TextButton.icon(
+                                    icon: Icon(Icons.cancel,
+                                        color: AppTheme.red,
+                                        size: 20),
+                                    label: Text(
+                                      'Cancel request',
+                                      style: GoogleFonts.inter(
+                                        color: AppTheme.red,
+                                        fontWeight:
+                                            FontWeight.w600,
+                                      ),
+                                    ),
+                                    onPressed: _cancelRequest,
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
