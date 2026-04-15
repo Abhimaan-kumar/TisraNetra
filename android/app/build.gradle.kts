@@ -35,6 +35,11 @@ android {
         multiDexEnabled = true
     }
 
+    // Prevent compression of TFLite model files
+    androidResources {
+        noCompress += listOf("tflite", "lite")
+    }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")

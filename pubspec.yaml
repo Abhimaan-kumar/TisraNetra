@@ -84,8 +84,10 @@ flutter:
   # Add image assets - place your logo at assets/images/logo.png
   assets:
     - images/logo.png
-    # Optional: Add TFLite model for face embeddings
+    # TFLite models
     - assets/models/mobile_face_net.tflite
+    - assets/models/ssd_mobilenet_v2.tflite
+    - assets/models/coco_labels.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:
