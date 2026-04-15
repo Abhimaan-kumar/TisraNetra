@@ -73,8 +73,37 @@ class PathAnalyzerService {
   Set<String> _lastAnnouncedObjects = {};
   DateTime _lastInfoTime = DateTime(2000);
 
-  /// Analyze detected objects and produce navigation guidance.
-  PathAnalysis analyze(List<NavDetectedObject> detections) {
+  /// Analyzes the frame detections and generates navigation guidance.
+  /// Converts visual positions into actionable voice prompts.
+  PathAnalysis analyze(List<NavDetectedObject> detections, {String? structuralBlocker}) {
+    if (structuralBlocker != null) {
+      String enGuidance;
+      String hiGuidance;
+
+      if (structuralBlocker == 'door') {
+        enGuidance = 'Door in front of you. Open the door.';
+        hiGuidance = 'सामने दरवाज़ा है। कृपया दरवाज़ा खोलें।';
+      } else if (structuralBlocker == 'wall') {
+        enGuidance = 'Wall in front of you. Move left or right.';
+        hiGuidance = 'सामने दीवार है। बाईं या दाईं ओर मुड़ें।';
+      } else {
+        enGuidance = 'Path blocked by $structuralBlocker. Move left or right.';
+        hiGuidance = 'सामने $structuralBlocker है। बाईं या दाईं ओर मुड़ें।';
+      }
+
+      return PathAnalysis(
+        isPathClear: false,
+        guidance: enGuidance,
+        guidanceHi: hiGuidance,
+        alertPriority: 1, // Critical priority
+        obstacles: [],
+        primaryThreat: null,
+        leftBlocked: true,
+        centerBlocked: true,
+        rightBlocked: true,
+      );
+    }
+
     if (detections.isEmpty) {
       return const PathAnalysis(
         isPathClear: true,
@@ -173,6 +202,12 @@ class PathAnalyzerService {
           guidance += ' Stop! All paths blocked.';
           guidanceHi += ' रुकें! सभी रास्ते बंद हैं।';
         }
+      } else if (zone == 'on the left') {
+        guidance += ' Move right to avoid.';
+        guidanceHi += ' बचने के लिए दाईं ओर जाएं।';
+      } else if (zone == 'on the right') {
+        guidance += ' Move left to avoid.';
+        guidanceHi += ' बचने के लिए बाईं ओर जाएं।';
       }
     }
     // Centre path is blocked by obstacle
@@ -215,11 +250,11 @@ class PathAnalyzerService {
           .join(', ');
 
       if (leftBlocked) {
-        guidance = 'Path clear ahead. $objectNames on the left.';
-        guidanceHi = 'रास्ता साफ है। बाईं ओर $objectNames।';
+        guidance = 'Path clear ahead. $objectNames on the left. Move right.';
+        guidanceHi = 'रास्ता साफ है। बाईं ओर $objectNames। दाईं ओर जाएं।';
       } else if (rightBlocked) {
-        guidance = 'Path clear ahead. $objectNames on the right.';
-        guidanceHi = 'रास्ता साफ है। दाईं ओर $objectNames।';
+        guidance = 'Path clear ahead. $objectNames on the right. Move left.';
+        guidanceHi = 'रास्ता साफ है। दाईं ओर $objectNames। बाईं ओर जाएं।';
       } else {
         guidance = 'Walk straight. Nearby: $objectNames.';
         guidanceHi = 'सीधे चलें। आसपास: $objectNames।';

@@ -27,6 +27,7 @@ import '../services/navigation_service.dart';
 import '../services/face_embedding_service.dart';
 import '../services/face_db_service.dart';
 import '../services/tts_service.dart';
+import '../services/scene_labeling_service.dart';
 import '../widgets/volume_button_mixin.dart';
 import '../theme/app_theme.dart';
 import 'registration.dart';
@@ -67,6 +68,7 @@ class _NavigateScreenState extends State<NavigateScreen>
   final NavigationService _navService = NavigationService();
   final FaceEmbeddingService _faceService = FaceEmbeddingService();
   final FaceDBService _faceDB = FaceDBService();
+  final SceneLabelingService _sceneLabeler = SceneLabelingService();
   late FaceDetector _faceDetector;
 
   // ── Camera ────────────────────────────────────────────────────────────────
@@ -129,6 +131,7 @@ class _NavigateScreenState extends State<NavigateScreen>
     _detectionService.dispose();
     _faceService.dispose();
     _faceDetector.close();
+    _sceneLabeler.dispose();
     _navService.dispose();
     _tts.dispose();
     super.dispose();
@@ -253,10 +256,17 @@ class _NavigateScreenState extends State<NavigateScreen>
       final detections =
           _detectionService.detect(image, _sensorOrientation);
 
-      // 2. Path analysis
-      final analysis = _pathAnalyzer.analyze(detections);
+      // 2. Structural blockage detection (walls, doors)
+      String? structuralBlocker;
+      if (detections.isEmpty || detections.every((d) => d.dangerLevel == DangerLevel.info)) {
+         final inputImage = _buildInputImage(image);
+         structuralBlocker = await _sceneLabeler.detectStructuralBlockage(inputImage);
+      }
 
-      // 3. Face recognition (if person detected)
+      // 3. Path analysis
+      final analysis = _pathAnalyzer.analyze(detections, structuralBlocker: structuralBlocker);
+
+      // 4. Face recognition (if person detected)
       String? faceName;
       if (detections.any((d) => d.label == 'person')) {
         faceName = await _tryFaceRecognition(image);
