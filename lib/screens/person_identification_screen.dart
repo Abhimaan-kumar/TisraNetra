@@ -1,42 +1,54 @@
 // lib/screens/person_identification_screen.dart
 //
-// REAL-TIME FACE RECOGNITION SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
-// • Processes camera frames continuously via image stream (no polling delay)
-// • Only speaks when identity CHANGES (avoids repetitive TTS)
-// • Liveness detection: asks user to blink before confirming identity
-// • Enrollment: capture 5 frames at different angles → averaged embedding
-// • Works like phone face-unlock: one authorized person, all others = unknown
+// Real-time face recognition screen using:
+//   • camera (YUV420 image stream)
+//   • google_mlkit_face_detection (face bounding boxes)
+//   • tflite_flutter + MobileFaceNet (192-d embeddings)
+//   • sqflite (local person database)
+//
+// Workflow:
+//   1. Stream camera frames, process every 5th frame.
+//   2. Detect faces via ML Kit.
+//   3. Convert YUV→RGB, rotate, crop face, resize 112×112, normalise, run TFLite.
+//   4. Compare embedding against all stored persons (cosine similarity ≥ 0.6).
+//   5. Display identified name or "Unknown" over the camera preview.
+//   6. Unknown faces trigger an optional save flow (5 poses: normal/left/right/up/down).
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:google_fonts/google_fonts.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
-import '../services/person_identification_service.dart';
+import '../services/face_db_service.dart';
+import '../services/face_embedding_service.dart';
 import '../services/tts_service.dart';
 import '../widgets/volume_button_mixin.dart';
-import 'profile_screen.dart';
-import 'registration.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Screen state enum
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-enum _Mode {
-  initializing, // loading model + camera
-  idle, // paused
-  scanning, // live recognition active
-  enrolling, // capturing samples for registration
-  saving, // writing to DB
-}
+const _kProcessEveryN = 5; // process every N-th frame
+const _kThreshold = 0.6; // cosine similarity threshold
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main widget
-// ─────────────────────────────────────────────────────────────────────────────
+const _kGold = Color(0xFFD4AC0D);
+
+const _kGreen = Color(0xFF00E676);
+const _kRed = Color(0xFFFF3D71);
+const _kSurface = Color(0xFF141929);
+const _kCard = Color(0xFF1C2137);
+const _kCardBorder = Color(0xFF2A3050);
+
+const List<(String label, String instruction)> _kPoses = [
+  ('Normal', 'Look straight at the camera'),
+  ('Left', 'Slowly turn head to the left'),
+  ('Right', 'Slowly turn head to the right'),
+  ('Up', 'Tilt head slightly upward'),
+  ('Down', 'Tilt head slightly downward'),
+];
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
 
 class PersonIdentificationScreen extends StatefulWidget {
   const PersonIdentificationScreen({super.key});
@@ -46,143 +58,469 @@ class PersonIdentificationScreen extends StatefulWidget {
       _PersonIdentificationScreenState();
 }
 
-class _PersonIdentificationScreenState extends State<PersonIdentificationScreen>
-    with WidgetsBindingObserver, VolumeButtonMixin, TickerProviderStateMixin {
+class _PersonIdentificationScreenState
+    extends State<PersonIdentificationScreen>
+    with WidgetsBindingObserver, VolumeButtonMixin {
   // ── Services ──────────────────────────────────────────────────────────────
-  final PersonIdentificationService _svc = PersonIdentificationService();
+  final FaceDBService _dbService = FaceDBService();
+  final FaceEmbeddingService _embeddingService = FaceEmbeddingService();
   final TtsService _tts = TtsService();
-  final stt.SpeechToText _stt = stt.SpeechToText();
-  final TextEditingController _nameCtrl = TextEditingController();
+  late final FaceDetector _faceDetector;
 
   // ── Camera ────────────────────────────────────────────────────────────────
   CameraController? _cam;
+  List<CameraDescription> _cameras = [];
   bool _camReady = false;
+  int _sensorOrientation = 0;
 
-  // ── Recognition loop ──────────────────────────────────────────────────────
-  bool _isProcessingFrame = false;
-  int _frameSkip = 0; // process every 3rd frame
-  static const int _frameSkipTarget = 3;
+  // ── Processing ────────────────────────────────────────────────────────────
+  bool _isProcessing = false;
+  int _frameCount = 0;
 
-  // ── Screen state ──────────────────────────────────────────────────────────
-  _Mode _mode = _Mode.initializing;
-  String _status = 'Loading model…';
+  // ── Detection results ─────────────────────────────────────────────────────
+  List<Face> _faces = [];
+  String _identifiedName = '';
+  double _confidence = 0.0;
+  Size _imageSize = Size.zero;
 
-  // ── Recognition results ───────────────────────────────────────────────────
-  String? _currentName; // currently displayed name (null = unknown/no face)
-  bool _hasFace = false;
-  double? _lastDistance;
-  bool _livenessOk = false;
+  // ── TTS debounce ──────────────────────────────────────────────────────────
+  String _lastSpokenName = '';
+  DateTime _lastSpeakTime = DateTime(2000);
 
-  // ── TTS deduplication ─────────────────────────────────────────────────────
-  String? _lastSpoken;
-  DateTime? _lastSpokenAt;
-  static const _speakCooldown = Duration(seconds: 8);
+  // ── Person DB cache ───────────────────────────────────────────────────────
+  List<PersonRecord> _persons = [];
 
-  // ── Enrollment ────────────────────────────────────────────────────────────
-  static const int _enrollTarget = 5; // 5 samples → robust average
-  final List<List<double>> _enrollSamples = [];
-  bool _enrollCapturing = false;
+  // ── Save flow ─────────────────────────────────────────────────────────────
+  bool _isSaving = false;
+  int _saveStep = -1; // -1 = not saving, 0–4 = pose index
+  bool _capturingPose = true; // blocks capture until ready
+  List<List<double>> _capturedEmbeddings = [];
 
-  // ── Persons ───────────────────────────────────────────────────────────────
-  List<SavedPerson> _persons = [];
+  // ── Status ────────────────────────────────────────────────────────────────
+  String _status = 'Initializing…';
+  bool _initialized = false;
+  String _initError = '';
 
-  // ── Liveness UI ───────────────────────────────────────────────────────────
-  bool _requireLiveness = true;
-  bool _livenessPrompted = false;
-  late final AnimationController _blinkAnim = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 600),
-  );
-
-  // ── STT ───────────────────────────────────────────────────────────────────
-  bool _sttReady = false;
-
-  // ── Counters ──────────────────────────────────────────────────────────────
-  int _scanCount = 0;
-
-  static const _accent = Color(0xFFBB86FC);
-  static const _green = Color(0xFF00E676);
-  static const _orange = Color(0xFFFF9800);
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Lifecycle
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Lifecycle
+  // ═══════════════════════════════════════════════════════════════════════════
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     initVolumeButtonListener();
-    _bootstrap();
-  }
-
-  Future<void> _bootstrap() async {
-    // Run initializations concurrently where possible
-    _sttReady = await _stt.initialize();
-    await _svc.initialize(); // TFLite + SQLite
-    await _initCamera();
-    await _reloadPersons();
-
-    if (!mounted) return;
-
-    if (!_svc.modelLoaded) {
-      _setStatus(
-        '⚠️ TFLite model missing. Place mobile_face_net.tflite in assets/models/',
-      );
-      await _tts.speak(
-        'Face recognition model not found. Please add the model file.',
-      );
-      return;
-    }
-
-    _setMode(_Mode.scanning);
-    _setStatus('Scanning — point camera at a person');
-    _svc.resetLiveness();
-    await _tts.speak(
-      'Person identification ready. '
-      '${_requireLiveness ? "Blink to verify liveness. " : ""}'
-      'Point camera at someone to identify them.',
-    );
+    _initAll();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    switch (state) {
-      case AppLifecycleState.inactive:
-      case AppLifecycleState.paused:
-        _stopStream();
-        break;
-      case AppLifecycleState.resumed:
-        _initCamera();
-        break;
-      default:
-        break;
+    if (state == AppLifecycleState.inactive) {
+      _cam?.dispose();
+      _cam = null;
+      _camReady = false;
+    } else if (state == AppLifecycleState.resumed && _initialized) {
+      _initCamera();
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stopStream();
+    try {
+      _cam?.stopImageStream();
+    } catch (_) {}
     _cam?.dispose();
-    _svc.dispose();
+    _faceDetector.close();
+    _embeddingService.dispose();
     _tts.dispose();
-    _nameCtrl.dispose();
-    _stt.cancel();
-    _blinkAnim.dispose();
     super.dispose();
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // VolumeButtonMixin
-  // ══════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Initialisation
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<void> _initAll() async {
+    try {
+      // 1. Load TFLite model
+      await _embeddingService.init();
+
+      // 2. Init face detector (fast mode, tracking on)
+      _faceDetector = FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.fast,
+          enableTracking: true,
+          minFaceSize: 0.15,
+        ),
+      );
+
+      // 3. Load saved persons
+      await _loadPersons();
+
+      // 4. Init camera
+      await _initCamera();
+
+      if (!mounted) return;
+      setState(() {
+        _initialized = true;
+        _status = 'Ready';
+      });
+      _tts.speak(
+        'Person identification ready. Point the camera at a person.',
+      );
+    } catch (e) {
+      debugPrint('[PersonID] Init error: $e');
+      if (mounted) {
+        setState(() {
+          _initError = e.toString();
+          _status = 'Initialisation failed';
+        });
+      }
+      _tts.speak('Failed to initialise. Please restart the screen.');
+    }
+  }
+
+  Future<void> _loadPersons() async {
+    _persons = await _dbService.getAllPersons();
+    debugPrint('[PersonID] Loaded ${_persons.length} persons from DB');
+  }
+
+  Future<void> _initCamera() async {
+    _cameras = await availableCameras();
+    if (_cameras.isEmpty) {
+      setState(() => _status = 'No camera available');
+      return;
+    }
+
+    final camera = _cameras.first; // rear camera
+    _sensorOrientation = camera.sensorOrientation;
+
+    final ctrl = CameraController(
+      camera,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.yuv420,
+    );
+    await ctrl.initialize();
+    if (!mounted) return;
+
+    setState(() {
+      _cam = ctrl;
+      _camReady = true;
+    });
+
+    ctrl.startImageStream(_onCameraFrame);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Frame processing pipeline
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  void _onCameraFrame(CameraImage image) {
+    _frameCount++;
+    if (_frameCount % _kProcessEveryN != 0) return;
+    if (_isProcessing) return;
+    _isProcessing = true;
+    _processImage(image);
+  }
+
+  Future<void> _processImage(CameraImage image) async {
+    try {
+      // ── Synchronous: touch camera data BEFORE any await ──────────────────
+
+      // 1. Build InputImage for ML Kit (copies bytes via WriteBuffer)
+      final inputImage = _buildInputImage(image);
+
+      // 2. Convert YUV→RGB (synchronous, uses native camera buffer)
+      final rgbImage = _embeddingService.convertCameraImage(image);
+
+      // ── Async: camera data no longer needed after this point ─────────────
+
+      // 3. Rotate to match ML Kit bbox coordinate system
+      final rotatedImage =
+          _embeddingService.rotateImage(rgbImage, _sensorOrientation);
+
+      // 4. Face detection (runs on native thread)
+      final faces = await _faceDetector.processImage(inputImage);
+      if (!mounted) return;
+
+      // 5. Effective image size (post-rotation, for overlay scaling)
+      final effectiveSize =
+          (_sensorOrientation == 90 || _sensorOrientation == 270)
+              ? Size(image.height.toDouble(), image.width.toDouble())
+              : Size(image.width.toDouble(), image.height.toDouble());
+
+      if (faces.isEmpty) {
+        setState(() {
+          _faces = [];
+          _identifiedName = '';
+          _confidence = 0.0;
+          _imageSize = effectiveSize;
+          _status = _isSaving
+              ? '${_kPoses[_saveStep].$2} — waiting for face…'
+              : 'No face detected';
+        });
+        return;
+      }
+
+      // 6. Use the first (largest) detected face
+      final face = faces.first;
+
+      // 7. Crop face region from rotated RGB image
+      final faceImage =
+          _embeddingService.cropFace(rotatedImage, face.boundingBox);
+
+      // 8. Run MobileFaceNet → 192-d embedding
+      final embedding = _embeddingService.getEmbedding(faceImage);
+
+      // 9. Route to save or identify
+      if (_isSaving && _saveStep >= 0 && _saveStep < _kPoses.length) {
+        _captureForSave(embedding, faces, effectiveSize);
+      } else {
+        _identifyPerson(embedding, faces, effectiveSize);
+      }
+    } catch (e) {
+      debugPrint('[PersonID] Processing error: $e');
+      if (mounted) setState(() => _status = 'Processing error');
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  /// Build a proper NV21 InputImage from a YUV_420_888 camera frame.
+  ///
+  /// NV21 layout: all Y bytes first, then interleaved V,U bytes.
+  InputImage _buildInputImage(CameraImage image) {
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+
+    final int width = image.width;
+    final int height = image.height;
+    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
+
+    late final Uint8List nv21;
+
+    if (uvPixelStride == 2) {
+      // Fast path: UV planes are already interleaved
+      final int yRowBytes = width;
+      final int totalYBytes = yRowBytes * height;
+      final int totalUVBytes = vPlane.bytes.length;
+
+      nv21 = Uint8List(totalYBytes + totalUVBytes);
+
+      // Copy Y plane
+      if (yPlane.bytesPerRow == width) {
+        nv21.setRange(0, totalYBytes, yPlane.bytes);
+      } else {
+        int dst = 0;
+        for (int row = 0; row < height; row++) {
+          final int src = row * yPlane.bytesPerRow;
+          nv21.setRange(dst, dst + width, yPlane.bytes, src);
+          dst += width;
+        }
+      }
+      // Copy VU interleaved
+      nv21.setRange(totalYBytes, totalYBytes + totalUVBytes, vPlane.bytes);
+    } else {
+      // Slow path: UV planes are planar
+      final int uvWidth = width ~/ 2;
+      final int uvHeight = height ~/ 2;
+      final int ySize = width * height;
+
+      nv21 = Uint8List(ySize + uvWidth * uvHeight * 2);
+
+      // Copy Y plane
+      int pos = 0;
+      for (int row = 0; row < height; row++) {
+        final int offset = row * yPlane.bytesPerRow;
+        for (int col = 0; col < width; col++) {
+          nv21[pos++] = yPlane.bytes[offset + col];
+        }
+      }
+
+      // Interleave V, U
+      for (int row = 0; row < uvHeight; row++) {
+        for (int col = 0; col < uvWidth; col++) {
+          final int vi = row * vPlane.bytesPerRow + col;
+          final int ui = row * uPlane.bytesPerRow + col;
+          nv21[pos++] = vPlane.bytes[vi];
+          nv21[pos++] = uPlane.bytes[ui];
+        }
+      }
+    }
+
+    final rotation = switch (_sensorOrientation) {
+      0 => InputImageRotation.rotation0deg,
+      90 => InputImageRotation.rotation90deg,
+      180 => InputImageRotation.rotation180deg,
+      270 => InputImageRotation.rotation270deg,
+      _ => InputImageRotation.rotation0deg,
+    };
+
+    return InputImage.fromBytes(
+      bytes: nv21,
+      metadata: InputImageMetadata(
+        size: Size(width.toDouble(), height.toDouble()),
+        rotation: rotation,
+        format: InputImageFormat.nv21,
+        bytesPerRow: width,
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Identification
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  void _identifyPerson(
+      List<double> embedding, List<Face> faces, Size imageSize) {
+    if (!mounted) return;
+
+    String bestName = 'Unknown';
+    double bestSim = 0.0;
+
+    for (final person in _persons) {
+      for (final stored in person.embeddings) {
+        final sim = _embeddingService.cosineSimilarity(embedding, stored);
+        if (sim > bestSim) {
+          bestSim = sim;
+          bestName = person.name;
+        }
+      }
+    }
+
+    if (bestSim < _kThreshold) {
+      bestName = 'Unknown';
+      bestSim = 0.0;
+    }
+
+    // Debounced TTS announcement (speak only on change, with 3s cooldown)
+    final now = DateTime.now();
+    if (bestName != _lastSpokenName &&
+        now.difference(_lastSpeakTime).inSeconds >= 3) {
+      _lastSpokenName = bestName;
+      _lastSpeakTime = now;
+      if (bestName == 'Unknown') {
+        _tts.speak('Unknown person.');
+      } else {
+        _tts.speak('This is $bestName.');
+      }
+    }
+
+    setState(() {
+      _faces = faces;
+      _imageSize = imageSize;
+      _identifiedName = bestName;
+      _confidence = bestSim;
+      _status = bestName == 'Unknown'
+          ? 'Unknown person detected'
+          : 'Identified: $bestName '
+              '(${(bestSim * 100).toStringAsFixed(1)}%)';
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Save flow  (5 poses: normal → left → right → up → down)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  Future<void> _startSaveFlow() async {
+    setState(() {
+      _isSaving = true;
+      _saveStep = 0;
+      _capturedEmbeddings = [];
+      _capturingPose = true; // block capture until TTS finishes
+      _status = _kPoses[0].$2;
+    });
+
+    await _tts.speak(
+      'Starting face enrollment. Ask the person to '
+      '${_kPoses[0].$2.toLowerCase()}.',
+    );
+    await Future.delayed(const Duration(seconds: 2));
+    if (mounted) _capturingPose = false; // allow first capture
+  }
+
+  /// Called while _isSaving to capture an embedding for the current pose.
+  void _captureForSave(
+      List<double> embedding, List<Face> faces, Size imageSize) {
+    // Update overlay
+    setState(() {
+      _faces = faces;
+      _imageSize = imageSize;
+    });
+
+    if (_capturingPose) return; // still in transition delay
+    _capturingPose = true;
+
+    _capturedEmbeddings.add(embedding);
+    _advanceSaveStep();
+  }
+
+  Future<void> _advanceSaveStep() async {
+    if (_saveStep < _kPoses.length - 1) {
+      // Show "Captured ✓" briefly
+      setState(() => _status = '${_kPoses[_saveStep].$1} captured ✓');
+      await _tts.speak('Captured.');
+      await Future.delayed(const Duration(milliseconds: 1200));
+      if (!mounted) return;
+
+      // Move to next pose
+      setState(() {
+        _saveStep++;
+        _status = _kPoses[_saveStep].$2;
+      });
+      await _tts.speak('Now ${_kPoses[_saveStep].$2.toLowerCase()}.');
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) _capturingPose = false; // allow next capture
+    } else {
+      // All 5 poses captured
+      setState(() => _status = 'All views captured!');
+      await _tts.speak('All views captured. Please enter the person\'s name.');
+      if (mounted) _showNameDialog();
+    }
+  }
+
+  void _cancelSave() {
+    setState(() {
+      _isSaving = false;
+      _saveStep = -1;
+      _capturedEmbeddings = [];
+      _capturingPose = true;
+      _status = 'Save cancelled';
+    });
+    _tts.speak('Face enrollment cancelled.');
+  }
+
+  Future<void> _savePerson(String name) async {
+    await _dbService.addPerson(name, _capturedEmbeddings);
+    await _loadPersons();
+    if (!mounted) return;
+    setState(() {
+      _isSaving = false;
+      _saveStep = -1;
+      _capturedEmbeddings = [];
+      _capturingPose = true;
+      _status = '$name saved successfully!';
+      _lastSpokenName = ''; // reset so next identification speaks
+    });
+    _tts.speak('$name has been saved. You can now identify them.');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Volume button / voice commands
+  // ═══════════════════════════════════════════════════════════════════════════
 
   @override
   Future<void> onVolumeUp() async {
-    if (_mode == _Mode.scanning) {
-      _pauseScan();
-    } else if (_mode == _Mode.idle) {
-      _resumeScan();
+    // Default action when no voice command: toggle save or repeat name
+    if (_isSaving) {
+      _cancelSave();
+    } else if (_identifiedName.isNotEmpty && _identifiedName != 'Unknown') {
+      await _tts.speak('This is $_identifiedName.');
+    } else {
+      await _tts.speak('Unknown person. Say "save" to save this face.');
     }
   }
 
@@ -190,482 +528,118 @@ class _PersonIdentificationScreenState extends State<PersonIdentificationScreen>
   Future<void> handleFeatureVoiceCommand(String cmd, String lang) async {
     final hi = lang == 'hi';
 
-    // Detect intents
-    final isScan = _matches(cmd, ['scan', 'start', 'shuru', 'chalu', 'resume']);
-    final isPause = _matches(cmd, ['pause', 'stop', 'ruko', 'band']);
-    final isRepeat = _matches(cmd, [
-      'repeat',
-      'phir',
-      'kaun',
-      'batao',
-      'dobara',
-      'again',
-    ]);
-    final isSave = _matches(cmd, [
-      'save',
-      'add',
-      'register',
-      'jodo',
-      'save kro',
-    ]);
-    final isDelete = _matches(cmd, ['delete', 'remove', 'hatao', 'mitao']);
-    final isToggle = _matches(cmd, ['liveness', 'blink', 'toggle']);
-
-    if (isPause) {
-      _pauseScan();
-      await _tts.speak(hi ? 'रुक गया।' : 'Paused.');
-    } else if (isScan) {
-      _resumeScan();
-      await _tts.speak(hi ? 'स्कैन शुरू।' : 'Scanning.');
-    } else if (isSave) {
-      _openEnrollSheet();
-    } else if (isDelete) {
-      _confirmDeleteAll(hi);
-    } else if (isToggle) {
-      setState(() => _requireLiveness = !_requireLiveness);
-      await _tts.speak(
-        hi
-            ? 'लाइवनेस ${_requireLiveness ? "चालू" : "बंद"}।'
-            : 'Liveness check ${_requireLiveness ? "enabled" : "disabled"}.',
-      );
-    } else if (isRepeat) {
-      await _speakCurrentResult(force: true, hi: hi);
-    } else {
-      await _tts.speak(
-        hi
-            ? '"स्कैन", "रुको", "सेव", या "दोहराओ" बोलें।'
-            : 'Say "scan", "pause", "save", or "repeat".',
-      );
-    }
-  }
-
-  bool _matches(String cmd, List<String> keywords) =>
-      keywords.any(cmd.contains);
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Camera
-  // ══════════════════════════════════════════════════════════════════════════
-
-  Future<void> _initCamera() async {
-    try {
-      final cams = await availableCameras();
-      if (cams.isEmpty) {
-        _setStatus('No camera found');
-        return;
-      }
-
-      // Prefer front camera for face recognition
-      final cam = cams.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-        orElse: () => cams.first,
-      );
-
-      final ctrl = CameraController(
-        cam,
-        ResolutionPreset.high,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-      await ctrl.initialize();
-      await ctrl.setFocusMode(FocusMode.auto);
-      await ctrl.setExposureMode(ExposureMode.auto);
-      await ctrl.setFlashMode(FlashMode.off);
-
-      if (!mounted) return;
-      setState(() {
-        _cam = ctrl;
-        _camReady = true;
-      });
-
-      if (_mode == _Mode.scanning) _startStream();
-    } catch (e) {
-      _setStatus('Camera error: $e');
-    }
-  }
-
-  void _startStream() {
-    if (!_camReady || _cam == null) return;
-    if (_cam!.value.isStreamingImages) return;
-    _cam!.startImageStream(_onFrame);
-  }
-
-  void _stopStream() {
-    try {
-      if (_cam?.value.isStreamingImages == true) {
-        _cam!.stopImageStream();
-      }
-    } catch (_) {}
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Frame processing (called ~30fps, we sample every N frames)
-  // ══════════════════════════════════════════════════════════════════════════
-
-  void _onFrame(CameraImage image) {
-    if (_mode != _Mode.scanning) return;
-    if (_isProcessingFrame) return;
-
-    _frameSkip++;
-    if (_frameSkip < _frameSkipTarget) return;
-    _frameSkip = 0;
-
-    _isProcessingFrame = true;
-    _processFrame(image)
-        .then((_) {
-          _isProcessingFrame = false;
-        })
-        .catchError((e) {
-          _isProcessingFrame = false;
-          print('Frame error: $e');
-        });
-  }
-
-  Future<void> _processFrame(CameraImage image) async {
-    // Convert CameraImage → XFile via takePicture for ML Kit compatibility
-    // (CameraImage YUV → InputImage directly would be faster but more complex)
-    if (_cam == null) return;
-
-    try {
-      // Stop stream temporarily, take picture, restart
-      await _cam!.stopImageStream();
-      final photo = await _cam!.takePicture();
-      if (_mode == _Mode.scanning) _cam!.startImageStream(_onFrame);
-
-      _scanCount++;
-      final result = await _svc.identifyPerson(
-        photo,
-        requireLiveness: _requireLiveness,
-      );
-
-      if (!mounted) return;
-      _handleResult(result);
-    } catch (e) {
-      if (_mode == _Mode.scanning && _cam != null) {
-        try {
-          _cam!.startImageStream(_onFrame);
-        } catch (_) {}
-      }
-    }
-  }
-
-  void _handleResult(IdentifyResult result) {
-    if (!mounted) return;
-
-    // ── No face ──────────────────────────────────────────────────────────
-    if (!result.hasFace) {
-      if (_hasFace) {
-        setState(() {
-          _hasFace = false;
-          _currentName = null;
-          _lastDistance = null;
-          _status = 'No face — point camera at a person';
-        });
-      }
-      return;
-    }
-
-    // ── Face detected ────────────────────────────────────────────────────
-    setState(() {
-      _hasFace = true;
-      _lastDistance = result.distance;
-      _livenessOk = result.livenessVerified;
-    });
-
-    // Liveness gate: prompt to blink if not yet verified
-    if (_requireLiveness && !result.livenessVerified) {
-      if (!_livenessPrompted) {
-        _livenessPrompted = true;
-        _setStatus('Please blink to verify you are real');
-        _speakOnce('Please blink once to verify.', 'blink_prompt');
-      }
-      return;
-    }
-
-    _livenessPrompted = false;
-
-    final newName = result.matchedName;
-
-    // ── Known person ──────────────────────────────────────────────────────
-    if (newName != null) {
-      if (_currentName != newName) {
-        setState(() {
-          _currentName = newName;
-          _status =
-              '✓ Identified: $newName  (dist=${result.distance?.toStringAsFixed(2)})';
-        });
-        _speakOnce('$newName is in front of you.', newName);
-      }
-    } else {
-      // ── Unknown person ────────────────────────────────────────────────
-      if (_currentName != null || !_hasFace) {
-        setState(() {
-          _currentName = null;
-          _status = 'Unknown person detected';
-        });
-      }
-      // Show save UI after unknown face is stable
-      if (!_showSaveUI) {
-        setState(() {
-          _currentName = null; // This will make _showSaveUI = true
-          _hasFace = true; // Ensure face is detected
-        });
-      }
-      _speakOnce('Unknown person detected.', 'unknown');
-    }
-  }
-
-  bool get _showSaveUI => _currentName == null && _hasFace;
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Scan control
-  // ══════════════════════════════════════════════════════════════════════════
-
-  void _pauseScan() {
-    _stopStream();
-    _setMode(_Mode.idle);
-    _setStatus('Paused — press volume up or tap Resume');
-  }
-
-  void _resumeScan() {
-    _svc.resetLiveness();
-    _livenessPrompted = false;
-    _setMode(_Mode.scanning);
-    _setStatus('Scanning…');
-    _startStream();
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Enrollment sheet
-  // ══════════════════════════════════════════════════════════════════════════
-
-  void _openEnrollSheet() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      _showSnack('Not logged in — tap the person icon to login', isError: true);
-      _tts.speak('Not logged in.');
-      return;
-    }
-    if (!_svc.modelLoaded) {
-      _showSnack('TFLite model not loaded', isError: true);
-      return;
-    }
-
-    _stopStream();
-    _enrollSamples.clear();
-    _nameCtrl.clear();
-    _setMode(_Mode.enrolling);
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: false,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _EnrollSheet(
-        nameCtrl: _nameCtrl,
-        target: _enrollTarget,
-        sttReady: _sttReady,
-        speechToText: _stt,
-        getCount: () => _enrollSamples.length,
-        onCapture: _captureEnrollSample,
-        onSave: _commitEnrollment,
-        onCancel: () {
-          Navigator.pop(context);
-          _enrollSamples.clear();
-          _resumeScan();
-        },
-      ),
-    );
-  }
-
-  Future<bool> _captureEnrollSample() async {
-    if (_cam == null || !_camReady || _enrollCapturing) return false;
-    setState(() => _enrollCapturing = true);
-    try {
-      final photo = await _cam!.takePicture();
-      final emb = await _svc.extractEmbedding(photo);
-      if (emb == null) {
-        _showSnack(
-          'No face detected — ensure face is visible and well-lit',
-          isError: true,
-        );
-        return false;
-      }
-      _enrollSamples.add(emb);
-      print('📸 Sample ${_enrollSamples.length}/$_enrollTarget');
-      return true;
-    } catch (e) {
-      _showSnack('Capture failed: $e', isError: true);
-      return false;
-    } finally {
-      if (mounted) setState(() => _enrollCapturing = false);
-    }
-  }
-
-  Future<void> _commitEnrollment(String name) async {
-    if (Navigator.canPop(context)) Navigator.pop(context);
-
-    if (_enrollSamples.isEmpty) {
-      _showSnack(
-        'No face samples — please capture at least one',
-        isError: true,
-      );
-      _resumeScan();
-      return;
-    }
-
-    _setMode(_Mode.saving);
-    _setStatus('Saving $name…');
-
-    final result = await _svc.commitSave(
-      name: name.trim(),
-      embeddings: List.from(_enrollSamples),
-    );
-    _enrollSamples.clear();
-
-    if (!mounted) return;
-
-    switch (result.status) {
-      case SaveStatus.success:
-        await _reloadPersons();
-        setState(() {
-          _currentName = name.trim();
-          _status = '✅ ${name.trim()} enrolled!';
-        });
-        _showSnack('${name.trim()} saved ✅', backgroundColor: Colors.green);
+    if (cmd.contains('save') ||
+        cmd.contains('bachao') ||
+        cmd.contains('store')) {
+      if (_isSaving) {
+        await _tts
+            .speak(hi ? 'पहले से सेव हो रहा है।' : 'Already saving a face.');
+      } else if (_identifiedName == 'Unknown' && _faces.isNotEmpty) {
+        _startSaveFlow();
+      } else if (_faces.isEmpty) {
         await _tts.speak(
-          '${name.trim()} has been registered. I will recognise them next time.',
-        );
-        break;
-
-      case SaveStatus.notLoggedIn:
-        _showSnack('Not logged in. Tap person icon to login.', isError: true);
-        _tts.speak('Not logged in.');
-        break;
-
-      case SaveStatus.noModel:
-        _showSnack('TFLite model not loaded', isError: true);
-        _tts.speak('Model not available.');
-        break;
-
-      case SaveStatus.permissionDenied:
-        _showSnack(
-          'Firestore permission denied.\n'
-          'Fix: Firebase Console → Firestore → Rules → '
-          'allow read, write: if request.auth != null;',
-          isError: true,
-          duration: const Duration(seconds: 8),
-        );
-        _tts.speak('Permission denied. Saved locally.');
-        break;
-
-      default:
-        _showSnack('Save failed: ${result.message}', isError: true);
-        _tts.speak('Save failed.');
-    }
-
-    await Future.delayed(const Duration(seconds: 2));
-    if (mounted) _resumeScan();
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Helpers
-  // ══════════════════════════════════════════════════════════════════════════
-
-  Future<void> _reloadPersons() async {
-    final list = await _svc.loadPersons();
-    if (mounted) setState(() => _persons = list);
-  }
-
-  void _setMode(_Mode m) {
-    if (mounted) setState(() => _mode = m);
-  }
-
-  void _setStatus(String s) {
-    if (mounted) setState(() => _status = s);
-  }
-
-  /// Speak [text] only if different from last utterance or cooldown passed.
-  void _speakOnce(String text, String key) {
-    final now = DateTime.now();
-    if (_lastSpoken == key &&
-        _lastSpokenAt != null &&
-        now.difference(_lastSpokenAt!) < _speakCooldown)
-      return;
-    _lastSpoken = key;
-    _lastSpokenAt = now;
-    _tts.speak(text);
-  }
-
-  Future<void> _speakCurrentResult({
-    bool force = false,
-    bool hi = false,
-  }) async {
-    if (force) {
-      _lastSpoken = null;
-    }
-    if (_currentName != null) {
-      await _tts.speak(
-        hi
-            ? '${_currentName} आपके सामने हैं।'
-            : '$_currentName is in front of you.',
-      );
-    } else if (_hasFace) {
-      await _tts.speak(hi ? 'अज्ञात व्यक्ति।' : 'Unknown person detected.');
+            hi ? 'कोई चेहरा नहीं मिला।' : 'No face detected to save.');
+      } else {
+        await _tts.speak(hi
+            ? 'यह व्यक्ति पहले से पहचाना गया है।'
+            : 'This person is already identified.');
+      }
+    } else if (cmd.contains('cancel') || cmd.contains('रद्द')) {
+      if (_isSaving) _cancelSave();
+    } else if (cmd.contains('who') ||
+        cmd.contains('kaun') ||
+        cmd.contains('name')) {
+      if (_identifiedName.isNotEmpty && _identifiedName != 'Unknown') {
+        await _tts
+            .speak(hi ? 'यह $_identifiedName है।' : 'This is $_identifiedName.');
+      } else {
+        await _tts.speak(hi ? 'अनजान व्यक्ति।' : 'Unknown person.');
+      }
+    } else if (cmd.contains('list') ||
+        cmd.contains('persons') ||
+        cmd.contains('delete') ||
+        cmd.contains('hatao')) {
+      _showPersonsDialog();
     } else {
-      await _tts.speak(hi ? 'कोई चेहरा नहीं मिला।' : 'No face detected.');
+      await _tts.speak(hi
+          ? 'कृपया "save", "cancel", या "who" बोलें।'
+          : 'Say "save", "cancel", "who is this", or "list persons".');
     }
   }
 
-  void _showSnack(
-    String msg, {
-    bool isError = false,
-    Color? backgroundColor,
-    Duration duration = const Duration(seconds: 4),
-  }) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor:
-            backgroundColor ?? (isError ? Colors.redAccent : Colors.grey[800]),
-        duration: duration,
-      ),
-    );
-  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Dialogs
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  void _confirmDeleteAll(bool hi) {
+  void _showNameDialog() {
+    final controller = TextEditingController();
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E2E),
-        title: Text(
-          hi ? 'सभी हटाएं?' : 'Delete all?',
-          style: const TextStyle(color: Colors.white),
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: _kGold, width: 1),
         ),
-        content: Text(
-          hi
-              ? 'सभी सहेजे गए लोगों को हटाया जाएगा।'
-              : 'All enrolled persons will be removed.',
-          style: const TextStyle(color: Colors.white70),
+        title: Text(
+          'Save Person',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: GoogleFonts.inter(color: Colors.white),
+          decoration: InputDecoration(
+            labelText: 'Person\'s name',
+            labelStyle: GoogleFonts.inter(color: Colors.white60),
+            hintText: 'e.g. John',
+            hintStyle: GoogleFonts.inter(color: Colors.white30),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kCardBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _kGold),
+            ),
+            filled: true,
+            fillColor: _kSurface,
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _cancelSave();
+            },
             child: Text(
-              hi ? 'रद्द' : 'Cancel',
-              style: const TextStyle(color: Colors.white54),
+              'Cancel',
+              style: GoogleFonts.inter(color: Colors.white60),
             ),
           ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _svc.deleteAllPersons();
-              await _reloadPersons();
-              _tts.speak(hi ? 'सब हटा दिया।' : 'All persons deleted.');
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kGold,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isEmpty) return;
+              Navigator.pop(ctx);
+              _savePerson(name);
             },
-            child: const Text(
-              'Delete',
-              style: TextStyle(color: Colors.redAccent),
+            child: Text(
+              'Save',
+              style: GoogleFonts.inter(
+                color: Colors.black,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -673,202 +647,252 @@ class _PersonIdentificationScreenState extends State<PersonIdentificationScreen>
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // Build
-  // ══════════════════════════════════════════════════════════════════════════
+  void _showPersonsDialog() async {
+    final persons = await _dbService.getAllPersons();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _kCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: _kCardBorder),
+        ),
+        title: Text(
+          'Saved Persons (${persons.length})',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 300,
+          child: persons.isEmpty
+              ? Center(
+                  child: Text(
+                    'No persons saved yet.',
+                    style: GoogleFonts.inter(color: Colors.white60),
+                  ),
+                )
+              : ListView.separated(
+                  itemCount: persons.length,
+                  separatorBuilder: (_, _) =>
+                      const Divider(color: _kCardBorder, height: 1),
+                  itemBuilder: (_, i) {
+                    final p = persons[i];
+                    return ListTile(
+                      leading: const CircleAvatar(
+                        backgroundColor: _kGold,
+                        child: Icon(Icons.person, color: Colors.black),
+                      ),
+                      title: Text(
+                        p.name,
+                        style: GoogleFonts.inter(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        '${p.embeddings.length} view(s)',
+                        style: GoogleFonts.inter(
+                          color: Colors.white60,
+                          fontSize: 12,
+                        ),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline,
+                            color: _kRed, size: 22),
+                        onPressed: () async {
+                          await _dbService.deletePerson(p.id);
+                          await _loadPersons();
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          _tts.speak('${p.name} deleted.');
+                          _showPersonsDialog(); // refresh
+                        },
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child:
+                Text('Close', style: GoogleFonts.inter(color: Colors.white60)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Build
+  // ═══════════════════════════════════════════════════════════════════════════
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: _buildAppBar(),
-      body: _buildBody(),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildTopBar(),
+            Expanded(child: _buildCameraArea()),
+            _buildBottomPanel(),
+          ],
+        ),
+      ),
     );
   }
 
-  // ── AppBar ─────────────────────────────────────────────────────────────────
+  // ── Top bar ───────────────────────────────────────────────────────────────
 
-  PreferredSizeWidget _buildAppBar() => AppBar(
-    backgroundColor: Colors.black,
-    leading: IconButton(
-      icon: const Icon(Icons.arrow_back, color: Colors.white),
-      onPressed: () {
-        _stopStream();
-        Navigator.pop(context);
-      },
-    ),
-    title: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Person Identification',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
+  Widget _buildTopBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      color: Colors.black,
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () {
+              _tts.speak('Going back');
+              Navigator.pop(context);
+            },
           ),
-        ),
-        Text(
-          'Scan #$_scanCount  •  Enrolled: ${_persons.length}  '
-          '${_svc.modelLoaded ? "• ✅ AI Ready" : "• ⚠️ No Model"}  '
-          '${isMixinListening ? "• 🎤" : ""}',
-          style: const TextStyle(color: Colors.white54, fontSize: 10),
-        ),
-      ],
-    ),
-    actions: [
-      // Liveness toggle
-      IconButton(
-        icon: Icon(
-          Icons.remove_red_eye,
-          color: _requireLiveness ? _green : Colors.white38,
-        ),
-        tooltip: 'Toggle liveness check',
-        onPressed: () {
-          setState(() => _requireLiveness = !_requireLiveness);
-          _svc.resetLiveness();
-          _tts.speak('Liveness check ${_requireLiveness ? "on" : "off"}.');
-        },
-      ),
-      // Repeat result
-      IconButton(
-        icon: Icon(Icons.volume_up, color: _hasFace ? _accent : Colors.white38),
-        onPressed: () => _speakCurrentResult(force: true),
-      ),
-      // Auth
-      StreamBuilder<User?>(
-        stream: FirebaseAuth.instance.authStateChanges(),
-        builder: (_, snap) => IconButton(
-          icon: Icon(
-            snap.data != null ? Icons.account_circle : Icons.login,
-            color: snap.data != null ? _green : Colors.redAccent,
-          ),
-          tooltip: snap.data != null
-              ? 'Logged in: ${snap.data!.email ?? snap.data!.uid}'
-              : 'Not logged in — tap to login',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => snap.data != null
-                  ? const ProfileScreen()
-                  : const RegistrationScreen(),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _isSaving ? 'Face Enrollment' : 'Person Identification',
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  isMixinListening
+                      ? '🎤 Listening…'
+                      : 'Vol↑ = voice command',
+                  style: GoogleFonts.inter(
+                    color: Colors.white54,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
+          // Persons list button
+          IconButton(
+            icon: const Icon(Icons.people_alt_outlined, color: _kGold),
+            tooltip: 'Saved Persons',
+            onPressed: _showPersonsDialog,
+          ),
+        ],
       ),
-    ],
-  );
+    );
+  }
 
-  // ── Body ───────────────────────────────────────────────────────────────────
+  // ── Camera area ───────────────────────────────────────────────────────────
 
-  Widget _buildBody() {
-    if (_mode == _Mode.initializing) {
-      return const Center(
+  Widget _buildCameraArea() {
+    // Loading state
+    if (_initError.isNotEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: _kRed, size: 48),
+              const SizedBox(height: 16),
+              Text(
+                'Initialisation Error',
+                style: GoogleFonts.inter(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _initError,
+                style: GoogleFonts.inter(color: Colors.white60, fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (!_camReady || _cam == null) {
+      return Center(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 16),
-            Text('Loading AI model…', style: TextStyle(color: Colors.white70)),
+            const CircularProgressIndicator(color: _kGold),
+            const SizedBox(height: 16),
+            Text(
+              'Initialising camera & model…',
+              style: GoogleFonts.inter(color: Colors.white60),
+            ),
           ],
         ),
       );
     }
 
-    return Column(
-      children: [
-        // Camera view — takes most of the screen
-        Expanded(flex: 5, child: _buildCameraView()),
-        // Status strip
-        _buildStatusStrip(),
-        // Result / action panel
-        _buildResultPanel(),
-        // Controls
-        _buildControls(),
-      ],
-    );
-  }
-
-  // ── Camera view ────────────────────────────────────────────────────────────
-
-  Widget _buildCameraView() {
-    if (!_camReady || _cam == null) {
-      return Container(
-        color: Colors.grey[900],
-        child: const Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        ),
-      );
-    }
-
-    // Border color reflects current state
-    final Color borderColor;
-    if (_mode == _Mode.scanning && _currentName != null) {
-      borderColor = _green;
-    } else if (_mode == _Mode.scanning && _hasFace) {
-      borderColor = _orange;
-    } else {
-      borderColor = _accent;
-    }
-
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Live preview
+        // Camera preview
         CameraPreview(_cam!),
 
-        // Pulsing border when scanning
-        if (_mode == _Mode.scanning || _mode == _Mode.enrolling)
-          _PulsingBorder(color: borderColor),
-
-        // Face detection overlay: name badge
-        if (_hasFace)
-          Positioned(
-            top: 12,
-            left: 12,
-            right: 12,
-            child: _FaceBadge(
-              name: _currentName,
-              distance: _lastDistance,
-              livenessOk: _livenessOk,
-              requireLiveness: _requireLiveness,
+        // Face bounding box overlay
+        if (_faces.isNotEmpty && _imageSize != Size.zero)
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _FaceOverlayPainter(
+                faces: _faces,
+                imageSize: _imageSize,
+                name: _identifiedName,
+                confidence: _confidence,
+                isSaving: _isSaving,
+              ),
             ),
           ),
 
-        // Liveness instruction overlay
-        if (_requireLiveness &&
-            _hasFace &&
-            !_livenessOk &&
-            _mode == _Mode.scanning)
-          Positioned(
-            bottom: 60,
-            left: 0,
-            right: 0,
-            child: Center(child: _LivenessPrompt()),
-          ),
-
-        // Listening indicator
-        if (isMixinListening)
+        // Save-mode instruction card
+        if (_isSaving && _saveStep >= 0)
           Positioned(
             top: 12,
+            left: 16,
+            right: 16,
+            child: _buildSaveInstructionCard(),
+          ),
+
+        // Listening badge
+        if (isMixinListening)
+          Positioned(
+            top: _isSaving ? 100 : 12,
             right: 12,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: _accent.withOpacity(0.85),
+                color: Colors.black.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.mic, color: Colors.white, size: 14),
-                  SizedBox(width: 4),
+                  const Icon(Icons.mic, color: _kGold, size: 14),
+                  const SizedBox(width: 4),
                   Text(
                     'Listening…',
-                    style: TextStyle(
+                    style: GoogleFonts.inter(
                       color: Colors.white,
                       fontSize: 11,
-                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
@@ -876,758 +900,235 @@ class _PersonIdentificationScreenState extends State<PersonIdentificationScreen>
             ),
           ),
 
-        // Paused overlay
-        if (_mode == _Mode.idle)
-          Container(
-            color: Colors.black54,
-            child: const Center(
-              child: Icon(
-                Icons.pause_circle_filled,
-                color: Colors.white54,
-                size: 80,
-              ),
-            ),
+        // Identified name overlay at the bottom of the camera preview
+        if (_identifiedName.isNotEmpty && _faces.isNotEmpty && !_isSaving)
+          Positioned(
+            bottom: 12,
+            left: 20,
+            right: 20,
+            child: _buildNameOverlay(),
           ),
       ],
     );
   }
 
-  // ── Status strip ───────────────────────────────────────────────────────────
+  // ── Save instruction card ─────────────────────────────────────────────────
 
-  Widget _buildStatusStrip() => Container(
-    width: double.infinity,
-    color: Colors.grey[900],
-    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
-    child: Row(
-      children: [
-        if (_mode == _Mode.scanning)
-          _PulseDot(color: _currentName != null ? _green : _orange),
-        if (_mode == _Mode.saving)
-          const SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(
-              color: Colors.white,
-              strokeWidth: 2,
-            ),
-          ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            _status,
-            style: TextStyle(
-              color: _mode == _Mode.scanning ? Colors.white : Colors.white54,
-              fontSize: 12,
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-
-  // ── Result panel ───────────────────────────────────────────────────────────
-
-  Widget _buildResultPanel() {
-    if (!_hasFace && _mode != _Mode.scanning) {
-      return Container(
-        height: 80,
-        color: Colors.grey[850],
-        child: const Center(
-          child: Text(
-            'Point camera at a person',
-            style: TextStyle(color: Colors.white38, fontSize: 13),
-          ),
-        ),
-      );
-    }
-
-    if (_currentName != null) {
-      return _KnownPersonCard(
-        name: _currentName!,
-        distance: _lastDistance,
-        onRepeat: () => _speakCurrentResult(force: true),
-      );
-    }
-
-    if (_hasFace) {
-      return _UnknownPersonCard(
-        onSave: _openEnrollSheet,
-        persons: _persons,
-        onDelete: (p) async {
-          await _svc.deletePerson(p);
-          await _reloadPersons();
-          _tts.speak('${p.name} removed.');
-        },
-      );
-    }
-
+  Widget _buildSaveInstructionCard() {
     return Container(
-      height: 80,
-      color: Colors.grey[850],
-      child: const Center(
-        child: Text(
-          'No face detected',
-          style: TextStyle(color: Colors.white38, fontSize: 13),
-        ),
-      ),
-    );
-  }
-
-  // ── Controls ───────────────────────────────────────────────────────────────
-
-  Widget _buildControls() => Container(
-    color: Colors.black,
-    padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-    child: Row(
-      children: [
-        // Scan / Pause
-        Expanded(
-          flex: 2,
-          child: ElevatedButton.icon(
-            onPressed: _camReady
-                ? (_mode == _Mode.scanning ? _pauseScan : _resumeScan)
-                : null,
-            icon: Icon(
-              _mode == _Mode.scanning
-                  ? Icons.pause_circle_outline
-                  : Icons.play_circle_outline,
-              size: 26,
-            ),
-            label: Text(
-              _mode == _Mode.scanning ? 'Pause' : 'Resume',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _mode == _Mode.scanning ? _orange : _accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        // Repeat
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: () => _speakCurrentResult(force: true),
-            icon: const Icon(Icons.replay, size: 20),
-            label: const Text('Repeat', style: TextStyle(fontSize: 14)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.grey[800],
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        // Enroll
-        ElevatedButton(
-          onPressed: _openEnrollSheet,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.grey[700],
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.all(16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-          child: const Icon(Icons.person_add_rounded, size: 22),
-        ),
-      ],
-    ),
-  );
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Sub-widgets
-// ═════════════════════════════════════════════════════════════════════════════
-
-// ── Face badge (top of camera) ────────────────────────────────────────────────
-
-class _FaceBadge extends StatelessWidget {
-  final String? name;
-  final double? distance;
-  final bool livenessOk;
-  final bool requireLiveness;
-  const _FaceBadge({
-    this.name,
-    this.distance,
-    required this.livenessOk,
-    required this.requireLiveness,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isKnown = name != null;
-    final color = isKnown ? const Color(0xFF00E676) : Colors.orange;
-    final icon = isKnown ? Icons.check_circle : Icons.help_outline;
-    final label = isKnown ? name! : 'Unknown';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.75),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: color.withOpacity(0.8), width: 1.5),
+        color: Colors.black.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kGold.withValues(alpha: 0.5)),
       ),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 18),
-          const SizedBox(width: 8),
+          // Step label
           Text(
-            label,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
+            'Step ${_saveStep + 1} / ${_kPoses.length}',
+            style: GoogleFonts.inter(
+              color: _kGold,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          if (distance != null) ...[
-            const SizedBox(width: 8),
-            Text(
-              '${distance!.toStringAsFixed(2)}',
-              style: const TextStyle(color: Colors.white54, fontSize: 11),
-            ),
-          ],
-          if (requireLiveness) ...[
-            const SizedBox(width: 8),
-            Icon(
-              livenessOk ? Icons.visibility : Icons.remove_red_eye_outlined,
-              color: livenessOk ? const Color(0xFF00E676) : Colors.white38,
-              size: 14,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-// ── Liveness prompt ────────────────────────────────────────────────────────────
-
-class _LivenessPrompt extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.symmetric(horizontal: 32),
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-    decoration: BoxDecoration(
-      color: Colors.black.withOpacity(0.85),
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: Colors.yellowAccent.withOpacity(0.6)),
-    ),
-    child: const Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.remove_red_eye, color: Colors.yellowAccent, size: 20),
-        SizedBox(width: 10),
-        Flexible(
-          child: Text(
-            'Please blink once to verify',
-            style: TextStyle(
+          const SizedBox(height: 6),
+          // Instruction
+          Text(
+            _kPoses[_saveStep].$2,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
               color: Colors.white,
-              fontSize: 14,
+              fontSize: 16,
               fontWeight: FontWeight.w500,
             ),
           ),
-        ),
-      ],
-    ),
-  );
-}
-
-// ── Known person card ─────────────────────────────────────────────────────────
-
-class _KnownPersonCard extends StatelessWidget {
-  final String name;
-  final double? distance;
-  final VoidCallback onRepeat;
-  const _KnownPersonCard({
-    required this.name,
-    this.distance,
-    required this.onRepeat,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.grey[850],
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Row(
-        children: [
-          const CircleAvatar(
-            backgroundColor: Color(0xFF00E676),
-            radius: 24,
-            child: Icon(Icons.check, color: Colors.white, size: 26),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'IDENTIFIED',
-                  style: TextStyle(
-                    color: Color(0xFF00E676),
-                    fontSize: 10,
-                    letterSpacing: 1.4,
-                    fontWeight: FontWeight.w700,
-                  ),
+          const SizedBox(height: 12),
+          // Progress dots
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(_kPoses.length, (i) {
+              final captured = i < _capturedEmbeddings.length;
+              final current = i == _saveStep;
+              return Container(
+                width: 12,
+                height: 12,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: captured
+                      ? _kGreen
+                      : current
+                          ? _kGold
+                          : Colors.white24,
+                  border: current
+                      ? Border.all(color: _kGold, width: 2)
+                      : null,
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  '$name is in front of you',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (distance != null)
-                  Text(
-                    'Confidence: ${((1 - distance! / 2) * 100).clamp(0, 100).toStringAsFixed(0)}%',
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
-                  ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.volume_up, color: Colors.white54),
-            onPressed: onRepeat,
+              );
+            }),
           ),
         ],
       ),
     );
   }
-}
 
-// ── Unknown person card ───────────────────────────────────────────────────────
+  // ── Name overlay ──────────────────────────────────────────────────────────
 
-class _UnknownPersonCard extends StatelessWidget {
-  final VoidCallback onSave;
-  final List<SavedPerson> persons;
-  final void Function(SavedPerson) onDelete;
-  const _UnknownPersonCard({
-    required this.onSave,
-    required this.persons,
-    required this.onDelete,
-  });
+  Widget _buildNameOverlay() {
+    final isKnown = _identifiedName != 'Unknown';
+    final color = isKnown ? _kGreen : _kRed;
 
-  @override
-  Widget build(BuildContext context) {
     return Container(
-      color: Colors.grey[850],
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+        boxShadow: [
+          BoxShadow(
+              color: color.withValues(alpha: 0.2), blurRadius: 12, spreadRadius: 1),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            isKnown ? Icons.check_circle : Icons.help_outline,
+            color: color,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              isKnown
+                  ? '$_identifiedName  •  ${(_confidence * 100).toStringAsFixed(1)}%'
+                  : 'Unknown Person',
+              style: GoogleFonts.inter(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Bottom panel ──────────────────────────────────────────────────────────
+
+  Widget _buildBottomPanel() {
+    return Container(
+      color: Colors.black,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange.withOpacity(0.5)),
-                ),
-                child: const Text(
-                  'UNKNOWN PERSON',
-                  style: TextStyle(
-                    color: Colors.orange,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              // Show enrolled persons count
-              Text(
-                '${persons.length} enrolled',
-                style: const TextStyle(color: Colors.white38, fontSize: 11),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
+          // Status bar
+          Container(
             width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: onSave,
-              icon: const Icon(Icons.person_add_rounded, size: 22),
-              label: const Text(
-                'Register This Person',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFBB86FC),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: _kSurface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kCardBorder),
+            ),
+            child: Text(
+              _status,
+              style: GoogleFonts.inter(
+                color: _isSaving ? _kGold : Colors.white70,
+                fontSize: 12,
               ),
             ),
           ),
-          // Quick list of enrolled persons with delete option
-          if (persons.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 36,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: persons.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (_, i) {
-                  final p = persons[i];
-                  return GestureDetector(
-                    onLongPress: () => onDelete(p),
-                    child: Chip(
-                      label: Text(
-                        p.name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                        ),
-                      ),
-                      backgroundColor: Colors.grey[700],
-                      deleteIcon: const Icon(Icons.close, size: 14),
-                      onDeleted: () => onDelete(p),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const Text(
-              'Hold or tap × to remove a person',
-              style: TextStyle(color: Colors.white24, fontSize: 10),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
+          const SizedBox(height: 12),
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Enrollment sheet
-// ═════════════════════════════════════════════════════════════════════════════
-
-class _EnrollSheet extends StatefulWidget {
-  final TextEditingController nameCtrl;
-  final int target;
-  final bool sttReady;
-  final stt.SpeechToText speechToText;
-  final int Function() getCount;
-  final Future<bool> Function() onCapture;
-  final Future<void> Function(String) onSave;
-  final VoidCallback onCancel;
-
-  const _EnrollSheet({
-    required this.nameCtrl,
-    required this.target,
-    required this.sttReady,
-    required this.speechToText,
-    required this.getCount,
-    required this.onCapture,
-    required this.onSave,
-    required this.onCancel,
-  });
-
-  @override
-  State<_EnrollSheet> createState() => _EnrollSheetState();
-}
-
-class _EnrollSheetState extends State<_EnrollSheet> {
-  static const _accent = Color(0xFFBB86FC);
-  bool _listening = false;
-  bool _capturing = false;
-  bool _saving = false;
-  int _count = 0;
-
-  // Instructions for each capture step
-  static const _stepHints = [
-    'Look straight at the camera',
-    'Turn slightly left',
-    'Turn slightly right',
-    'Tilt head slightly up',
-    'Normal position again',
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _count = widget.getCount();
-  }
-
-  Future<void> _capture() async {
-    if (_capturing || _count >= widget.target) return;
-    setState(() => _capturing = true);
-    final ok = await widget.onCapture();
-    setState(() {
-      _capturing = false;
-      if (ok) _count = widget.getCount();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final allDone = _count >= widget.target;
-    final hint = _count < _stepHints.length ? _stepHints[_count] : 'Capture';
-
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF1A1A2E),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: const EdgeInsets.fromLTRB(24, 14, 24, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Handle bar
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 18),
-
-            // Title
-            const Icon(Icons.face_retouching_natural, color: _accent, size: 40),
-            const SizedBox(height: 8),
-            const Text(
-              'Register a Person',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Capture ${widget.target} face samples from different angles.\n'
-              'This creates a robust face signature for reliable recognition.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
-            ),
-            const SizedBox(height: 18),
-
-            // Progress dots
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(
-                widget.target,
-                (i) => AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  margin: const EdgeInsets.symmetric(horizontal: 4),
-                  width: i < _count ? 16 : 12,
-                  height: i < _count ? 16 : 12,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: i < _count
-                        ? const Color(0xFF00E676)
-                        : Colors.white24,
-                    boxShadow: i < _count
-                        ? [
-                            const BoxShadow(
-                              color: Color(0x6600E676),
-                              blurRadius: 6,
-                            ),
-                          ]
-                        : null,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              allDone
-                  ? '✓ All samples captured!'
-                  : '$_count / ${widget.target}  —  $hint',
-              style: TextStyle(
-                color: allDone ? const Color(0xFF00E676) : Colors.white54,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // Capture button
+          // Action buttons
+          if (_isSaving) ...[
+            // Cancel save button
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: (_capturing || allDone) ? null : _capture,
-                icon: _capturing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: _accent,
-                        ),
-                      )
-                    : Icon(
-                        allDone ? Icons.check_circle : Icons.camera_alt,
-                        color: allDone ? const Color(0xFF00E676) : _accent,
-                        size: 20,
-                      ),
+              child: ElevatedButton.icon(
+                onPressed: _cancelSave,
+                icon: const Icon(Icons.close, size: 20),
                 label: Text(
-                  _capturing
-                      ? 'Capturing…'
-                      : allDone
-                      ? 'All samples done!'
-                      : 'Capture sample ${_count + 1} of ${widget.target}',
-                  style: TextStyle(
-                    color: allDone ? const Color(0xFF00E676) : _accent,
-                    fontSize: 14,
+                  'Cancel Enrollment',
+                  style: GoogleFonts.inter(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(
-                    color: allDone ? const Color(0xFF00E676) : _accent,
-                  ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kRed.withValues(alpha: 0.15),
+                  foregroundColor: _kRed,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: _kRed.withValues(alpha: 0.4)),
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 14),
-
-            // Name field
-            TextField(
-              controller: widget.nameCtrl,
-              autofocus: false,
-              textCapitalization: TextCapitalization.words,
-              style: const TextStyle(color: Colors.white, fontSize: 16),
-              decoration: InputDecoration(
-                hintText: "Person's name (e.g. Rahul)",
-                hintStyle: const TextStyle(color: Colors.white38),
-                filled: true,
-                fillColor: Colors.white.withOpacity(0.07),
-                prefixIcon: const Icon(
-                  Icons.badge_outlined,
-                  color: Colors.white38,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: const BorderSide(color: _accent, width: 1.5),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 16,
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            // Mic + Save row
+          ] else ...[
             Row(
               children: [
-                // Mic button
-                GestureDetector(
-                  onTap: () async {
-                    if (_listening) {
-                      await widget.speechToText.stop();
-                      setState(() => _listening = false);
-                      return;
-                    }
-                    if (!widget.sttReady) return;
-                    setState(() => _listening = true);
-                    await widget.speechToText.listen(
-                      onResult: (r) {
-                        widget.nameCtrl.text = r.recognizedWords;
-                        if (r.finalResult) setState(() => _listening = false);
-                      },
-                      listenFor: const Duration(seconds: 10),
-                      localeId: 'en_IN',
-                    );
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: _listening
-                          ? Colors.red.withOpacity(0.15)
-                          : _accent.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: _listening
-                            ? Colors.red
-                            : _accent.withOpacity(0.4),
-                      ),
-                    ),
-                    child: Icon(
-                      _listening ? Icons.mic_off : Icons.mic,
-                      color: _listening ? Colors.red : _accent,
-                      size: 26,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-
-                // Save button
+                // Speak name button
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: (_saving || _count == 0)
-                        ? null
-                        : () async {
-                            final name = widget.nameCtrl.text.trim();
-                            if (name.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Please enter a name'),
-                                ),
-                              );
-                              return;
-                            }
-                            setState(() => _saving = true);
-                            await widget.onSave(name);
-                          },
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.save_rounded, size: 22),
+                    onPressed: () {
+                      if (_identifiedName.isNotEmpty &&
+                          _identifiedName != 'Unknown') {
+                        _tts.speak('This is $_identifiedName.');
+                      } else {
+                        _tts.speak('Unknown person.');
+                      }
+                    },
+                    icon: const Icon(Icons.volume_up, size: 20),
                     label: Text(
-                      _saving
-                          ? 'Saving…'
-                          : _count == 0
-                          ? 'Capture first ↑'
-                          : 'Save  ($_count / ${widget.target})',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
+                      'Speak',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _count == 0 ? Colors.grey[700] : _accent,
+                      backgroundColor: _kSurface,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: const BorderSide(color: _kCardBorder),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Save face button
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: (_identifiedName == 'Unknown' &&
+                            _faces.isNotEmpty)
+                        ? _startSaveFlow
+                        : null,
+                    icon: const Icon(Icons.person_add_alt_1, size: 22),
+                    label: Text(
+                      'Save Face',
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _kGold,
+                      foregroundColor: Colors.black,
+                      disabledBackgroundColor: Colors.grey[800],
+                      disabledForegroundColor: Colors.grey[600],
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14),
                       ),
@@ -1636,100 +1137,126 @@ class _EnrollSheetState extends State<_EnrollSheet> {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-
-            TextButton(
-              onPressed: widget.onCancel,
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: Colors.white38, fontSize: 13),
-              ),
-            ),
-
-            if (_listening)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text(
-                  '🎤 Listening…',
-                  style: TextStyle(color: Colors.redAccent, fontSize: 12),
-                ),
-              ),
           ],
-        ),
+        ],
       ),
     );
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Animated helpers
-// ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Face overlay painter
+// ═══════════════════════════════════════════════════════════════════════════════
 
-class _PulsingBorder extends StatefulWidget {
-  final Color color;
-  const _PulsingBorder({required this.color});
-  @override
-  State<_PulsingBorder> createState() => _PulsingBorderState();
-}
+class _FaceOverlayPainter extends CustomPainter {
+  final List<Face> faces;
+  final Size imageSize;
+  final String name;
+  final double confidence;
+  final bool isSaving;
 
-class _PulsingBorderState extends State<_PulsingBorder>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 2),
-  )..repeat(reverse: true);
-  late final Animation<double> _a = Tween(begin: 0.3, end: 1.0).animate(_c);
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
+  const _FaceOverlayPainter({
+    required this.faces,
+    required this.imageSize,
+    required this.name,
+    required this.confidence,
+    required this.isSaving,
+  });
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _a,
-    builder: (_, __) => IgnorePointer(
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: widget.color.withOpacity(_a.value),
-            width: 3.0,
+  void paint(Canvas canvas, Size size) {
+    if (faces.isEmpty || imageSize == Size.zero) return;
+
+    final scaleX = size.width / imageSize.width;
+    final scaleY = size.height / imageSize.height;
+
+    for (final face in faces) {
+      final bbox = face.boundingBox;
+      final rect = Rect.fromLTRB(
+        bbox.left * scaleX,
+        bbox.top * scaleY,
+        bbox.right * scaleX,
+        bbox.bottom * scaleY,
+      );
+
+      final color = isSaving
+          ? _kGold
+          : (name == 'Unknown' ? _kRed : _kGreen);
+
+      // ── Glow ────────────────────────────────────────────────────────────
+      final glowPaint = Paint()
+        ..color = color.withValues(alpha: 0.12)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 16);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(12)),
+        glowPaint,
+      );
+
+      // ── Border ──────────────────────────────────────────────────────────
+      final borderPaint = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(12)),
+        borderPaint,
+      );
+
+      // ── Corner accents ──────────────────────────────────────────────────
+      _drawCorners(canvas, rect, color);
+
+      // ── Name label above face box ───────────────────────────────────────
+      if (!isSaving && name.isNotEmpty) {
+        final label = name == 'Unknown'
+            ? ' Unknown '
+            : ' $name ${(confidence * 100).toStringAsFixed(0)}% ';
+
+        final tp = TextPainter(
+          text: TextSpan(
+            text: label,
+            style: TextStyle(
+              color: name == 'Unknown' ? Colors.white : Colors.black,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              background: Paint()..color = color,
+            ),
           ),
-        ),
-      ),
-    ),
-  );
-}
+          textDirection: TextDirection.ltr,
+        )..layout();
 
-class _PulseDot extends StatefulWidget {
-  final Color color;
-  const _PulseDot({required this.color});
-  @override
-  State<_PulseDot> createState() => _PulseDotState();
-}
+        final yPos =
+            rect.top > tp.height + 8 ? rect.top - tp.height - 6 : rect.bottom + 4;
+        tp.paint(canvas, Offset(rect.left, yPos));
+      }
+    }
+  }
 
-class _PulseDotState extends State<_PulseDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 800),
-  )..repeat(reverse: true);
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
+  void _drawCorners(Canvas canvas, Rect r, Color color) {
+    final p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0
+      ..strokeCap = StrokeCap.round;
+    const l = 20.0;
+
+    // Top-left
+    canvas.drawLine(r.topLeft, r.topLeft + const Offset(l, 0), p);
+    canvas.drawLine(r.topLeft, r.topLeft + const Offset(0, l), p);
+    // Top-right
+    canvas.drawLine(r.topRight, r.topRight + const Offset(-l, 0), p);
+    canvas.drawLine(r.topRight, r.topRight + const Offset(0, l), p);
+    // Bottom-left
+    canvas.drawLine(r.bottomLeft, r.bottomLeft + const Offset(l, 0), p);
+    canvas.drawLine(r.bottomLeft, r.bottomLeft + const Offset(0, -l), p);
+    // Bottom-right
+    canvas.drawLine(r.bottomRight, r.bottomRight + const Offset(-l, 0), p);
+    canvas.drawLine(r.bottomRight, r.bottomRight + const Offset(0, -l), p);
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _c,
-    builder: (_, __) => Container(
-      width: 10,
-      height: 10,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: widget.color.withOpacity(0.4 + 0.6 * _c.value),
-      ),
-    ),
-  );
+  bool shouldRepaint(covariant _FaceOverlayPainter old) =>
+      old.faces != faces ||
+      old.name != name ||
+      old.confidence != confidence ||
+      old.isSaving != isSaving;
 }
