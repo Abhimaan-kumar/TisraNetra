@@ -224,11 +224,35 @@ class NavigationService {
     return _formatDistance(dist);
   }
 
-  /// Live ETA in minutes
+  /// Live ETA in minutes based on Google Maps native step durations
   int get etaMinutes {
-    if (_lastPosition == null) return 0;
-    final dist = _computeRemainingDistance();
-    return (dist / _avgWalkingSpeed / 60).ceil();
+    if (_currentRoute == null || _lastPosition == null) return 0;
+    
+    final steps = _currentRoute!.steps;
+    if (_currentStepIndex >= steps.length) return 0;
+    
+    int remainingSeconds = 0;
+    final currentStep = steps[_currentStepIndex];
+    
+    // 1. Proportional time for the current step
+    if (currentStep.distanceMeters > 0) {
+      final distToStepEnd = _distanceMetres(
+        _lastPosition!.latitude,
+        _lastPosition!.longitude,
+        currentStep.endLat,
+        currentStep.endLng,
+      );
+      // Clamp fraction to prevent GPS spikes from adding weird hours
+      final fraction = (distToStepEnd / currentStep.distanceMeters).clamp(0.0, 1.0);
+      remainingSeconds += (currentStep.durationSeconds * fraction).round();
+    }
+    
+    // 2. Add full time of all future steps
+    for (int i = _currentStepIndex + 1; i < steps.length; i++) {
+      remainingSeconds += steps[i].durationSeconds;
+    }
+    
+    return (remainingSeconds / 60).ceil();
   }
 
   /// Formatted ETA string
