@@ -1,6 +1,5 @@
-import 'dart:convert';
-import 'dart:typed_data';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'dart:math';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 class CurrencyDetectionResult {
   final List<int> detectedNotes;
@@ -15,90 +14,81 @@ class CurrencyDetectionResult {
 }
 
 class CurrencyService {
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY';
-  late final GenerativeModel _model;
+  final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  
+  static const List<int> _denominations = [2000, 500, 200, 100, 50, 20, 10];
 
-  CurrencyService() {
-    _model = GenerativeModel(
-      model: 'gemini-2.5-flash',
-      apiKey: _apiKey,
-      generationConfig: GenerationConfig(
-        temperature: 0.1,
-        maxOutputTokens: 300,
-      ),
-    );
-  }
-
-  Future<CurrencyDetectionResult?> detectCurrency(Uint8List imageBytes) async {
+  Future<CurrencyDetectionResult?> detectCurrency(String imagePath) async {
     try {
-      const prompt = '''
-Look at this image carefully. Your job is to find any Indian Rupee currency notes.
+      final inputImage = InputImage.fromFilePath(imagePath);
+      final recognizedText = await _textRecognizer.processImage(inputImage);
+      
+      print('Offline Currency OCR Raw: \n${recognizedText.text}');
 
-Indian currency notes have these denominations: 10, 20, 50, 100, 200, 500, 2000.
-
-Instructions:
-- Look for ANY paper money, banknotes, or currency in the image
-- Even if notes are partially visible, crumpled, or at an angle — still detect them
-- If you see a note but cannot read the denomination clearly, make your best guess
-- Count each note separately (e.g. two ₹500 notes = [500, 500])
-- If truly no currency at all, notes array should be empty
-
-You MUST respond with ONLY this JSON format, no explanation, no markdown:
-{"notes": [500, 100], "total": 600}
-
-If no currency found:
-{"notes": [], "total": 0}
-''';
-
-      final response = await _model.generateContent([
-        Content.multi([
-          DataPart(
-            'image/jpeg',
-            imageBytes,
-          ), // ← raw bytes, NOT base64Decode(base64Encode(...))
-          TextPart(prompt),
-        ]),
-      ]);
-
-      final text = response.text?.trim() ?? '';
-      print('Gemini raw response: $text');
-
-      if (text.isEmpty) {
-        return CurrencyDetectionResult(
-          detectedNotes: [],
-          totalAmount: 0,
-          rawResponse: 'Empty response',
-        );
+      final detectedNotes = <int>[];
+      final seenCenters = <Point<int>>[]; 
+      
+      // Strategy 1: Look for explicit numerical blocks matching standard denominations
+      for (TextBlock block in recognizedText.blocks) {
+         // Clean noise, leave numbers
+         final text = block.text.replaceAll(RegExp(r'[^0-9]'), '');
+         if (text.isEmpty) continue;
+         
+         final val = int.tryParse(text);
+         if (val != null && _denominations.contains(val)) {
+            // Group by physical closeness to avoid counting the same note twice 
+            // since a note has its number printed multiple times.
+            final center = Point<int>(
+              ((block.boundingBox.left + block.boundingBox.right) / 2).toInt(),
+              ((block.boundingBox.top + block.boundingBox.bottom) / 2).toInt(),
+            );
+            
+            bool isNewNote = true;
+            for (int i = 0; i < detectedNotes.length; i++) {
+               if (detectedNotes[i] == val) {
+                  final p2 = seenCenters[i];
+                  // Distance heuristic. If text blocks are close, they belong to the same note.
+                  final dist = sqrt(pow(center.x - p2.x, 2) + pow(center.y - p2.y, 2));
+                  if (dist < 400) { 
+                     isNewNote = false;
+                     break;
+                  }
+               }
+            }
+            
+            if (isNewNote) {
+               detectedNotes.add(val);
+               seenCenters.add(center);
+            }
+         }
       }
-
-      String jsonStr = text.replaceAll(RegExp(r'```json|```'), '').trim();
-      final jsonMatch = RegExp(r'\{[^{}]*\}').firstMatch(jsonStr);
-
-      if (jsonMatch == null) {
-        print('Could not extract JSON from: $jsonStr');
-        return CurrencyDetectionResult(
-          detectedNotes: [],
-          totalAmount: 0,
-          rawResponse: text,
-        );
+      
+      // Strategy 2: Fallback to text matching if numeric blocks are dirty/missed
+      if (detectedNotes.isEmpty) {
+         final raw = recognizedText.text.toLowerCase();
+         if (raw.contains('two thousand')) detectedNotes.add(2000);
+         else if (raw.contains('five hundred')) detectedNotes.add(500);
+         else if (raw.contains('two hundred')) detectedNotes.add(200);
+         else if (raw.contains('one hundred')) detectedNotes.add(100);
+         else if (raw.contains('fifty rupees')) detectedNotes.add(50);
+         else if (raw.contains('twenty rupees')) detectedNotes.add(20);
+         else if (raw.contains('ten rupees')) detectedNotes.add(10);
       }
-
-      final jsonData = jsonDecode(jsonMatch.group(0)!);
-      final notes = List<int>.from(
-        (jsonData['notes'] ?? []).map((n) => int.tryParse(n.toString()) ?? 0),
-      ).where((n) => n > 0).toList();
-
-      final total = notes.fold(0, (sum, n) => sum + n);
-
+      
+      final total = detectedNotes.fold(0, (sum, n) => sum + n);
+      
       return CurrencyDetectionResult(
-        detectedNotes: notes,
+        detectedNotes: detectedNotes,
         totalAmount: total,
-        rawResponse: text,
+        rawResponse: recognizedText.text,
       );
-    } catch (e, stack) {
-      print('Currency detection error: $e');
-      print('Stack: $stack');
+    } catch (e) {
+      print('Currency offline detection error: $e');
       rethrow;
     }
+  }
+
+  void dispose() {
+    _textRecognizer.close();
   }
 }

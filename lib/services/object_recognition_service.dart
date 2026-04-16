@@ -1,6 +1,9 @@
-import 'dart:convert';
-import 'dart:typed_data';
-import 'package:http/http.dart' as http;
+import 'dart:ui' show Rect;
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:image/image.dart' as img;
+import 'package:tflite_flutter/tflite_flutter.dart';
 
 // ── Detected object with normalized bounding box ─────────────────────────────
 // All coords are 0.0–1.0 (fraction of image width/height)
@@ -46,173 +49,151 @@ class ObjectRecognitionResult {
 // ── Service ───────────────────────────────────────────────────────────────────
 
 class ObjectRecognitionService {
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY';
+  static const String _modelAsset = 'assets/models/ssd_mobilenet_v2.tflite';
+  static const String _labelsAsset = 'assets/models/coco_labels.txt';
+  static const int _inputSize = 300;
+  static const double _confidenceThreshold = 0.50;
 
-  static const List<String> _models = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-preview-04-17',
-  ];
+  Interpreter? _interpreter;
+  List<String> _labels = [];
+  bool _isInitialized = false;
 
-  static const String _baseUrl =
-      'https://generativelanguage.googleapis.com/v1beta/models';
+  bool get isInitialized => _isInitialized;
 
-  // Ask Gemini for JSON with object names + bounding boxes.
-  // ymin/xmin/ymax/xmax are 0–1000 (Gemini's native coordinate scale).
-  static const String _prompt =
-      'Detect all objects in this image. '
-      'Respond ONLY with a valid JSON array. No markdown, no explanation, no extra text. '
-      'Each element must have exactly these keys: '
-      '"name" (short label, 1-3 words), '
-      '"xmin" (0-1000), "ymin" (0-1000), "xmax" (0-1000), "ymax" (0-1000). '
-      'Example: [{"name":"chair","xmin":120,"ymin":200,"xmax":400,"ymax":800}]. '
-      'If nothing is detected, return [].';
-
-  String? _workingModel;
-
-  Future<ObjectRecognitionResult?> recognizeObjects(Uint8List imageBytes) async {
-    if (_workingModel != null) {
-      return _callModel(_workingModel!, imageBytes);
-    }
-    for (final model in _models) {
-      print('🔄 Trying model: $model');
-      try {
-        final result = await _callModel(model, imageBytes);
-        if (result != null) {
-          _workingModel = model;
-          print('✅ Working model: $model');
-          return result;
-        }
-      } catch (e) {
-        print('⚠️ $model failed: $e');
-      }
-    }
-    print('❌ All models failed');
-    return null;
-  }
-
-  Future<ObjectRecognitionResult?> _callModel(
-      String model, Uint8List imageBytes) async {
-    final base64Image = base64Encode(imageBytes);
-    final url = '$_baseUrl/$model:generateContent?key=$_apiKey';
-
-    final body = jsonEncode({
-      'contents': [
-        {
-          'parts': [
-            {
-              'inline_data': {
-                'mime_type': 'image/jpeg',
-                'data': base64Image,
-              }
-            },
-            {'text': _prompt},
-          ]
-        }
-      ],
-      'generationConfig': {
-        'temperature': 0.1,
-        'maxOutputTokens': 512,
-      },
-    });
-
-    print('📡 POST → $model');
-    final response = await http
-        .post(
-          Uri.parse(url),
-          headers: {'Content-Type': 'application/json'},
-          body: body,
-        )
-        .timeout(const Duration(seconds: 20));
-
-    print('📥 ${response.statusCode} ← $model');
-
-    if (response.statusCode == 404 || response.statusCode == 403) {
-      throw Exception('Model not available: ${response.statusCode}');
-    }
-    if (response.statusCode != 200) {
-      final err = jsonDecode(response.body);
-      throw Exception(err['error']?['message'] ?? 'HTTP ${response.statusCode}');
-    }
-
-    final json = jsonDecode(response.body);
-    final candidates = json['candidates'] as List?;
-    if (candidates == null || candidates.isEmpty) return null;
-
-    final parts = candidates[0]?['content']?['parts'] as List?;
-    if (parts == null || parts.isEmpty) return null;
-
-    // Collect all text from parts
-    final rawText = parts
-        .map((p) => (p['text'] ?? '').toString())
-        .where((t) => t.isNotEmpty)
-        .join('')
-        .trim();
-
-    print('💬 Raw response: $rawText');
-
-    return _parseResult(rawText);
-  }
-
-  ObjectRecognitionResult _parseResult(String rawText) {
+  Future<void> init() async {
+    if (_isInitialized) return;
     try {
-      // Strip markdown code fences if present
-      String cleaned = rawText
-          .replaceAll(RegExp(r'```json\s*', caseSensitive: false), '')
-          .replaceAll(RegExp(r'```\s*'), '')
-          .trim();
+      final options = InterpreterOptions()..threads = 4;
+      _interpreter = await Interpreter.fromAsset(_modelAsset, options: options);
 
-      // Find the JSON array in the response
-      final start = cleaned.indexOf('[');
-      final end = cleaned.lastIndexOf(']');
-      if (start == -1 || end == -1 || end <= start) {
-        print('⚠️ No JSON array found in response');
-        return const ObjectRecognitionResult(objects: []);
-      }
+      final labelsRaw = await rootBundle.loadString(_labelsAsset);
+      _labels = labelsRaw.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
 
-      final jsonStr = cleaned.substring(start, end + 1);
-      final List<dynamic> raw = jsonDecode(jsonStr);
+      _isInitialized = true;
+      debugPrint('[ObjRecog] Initialised');
+    } catch (e) {
+      debugPrint('[ObjRecog] Init failed: $e');
+    }
+  }
 
+  void dispose() {
+    _interpreter?.close();
+    _interpreter = null;
+    _isInitialized = false;
+  }
+
+  Future<ObjectRecognitionResult?> recognizeObjects(CameraImage cameraImage, int sensorOrientation) async {
+    if (!_isInitialized || _interpreter == null) return null;
+
+    try {
+      final rgbImage = _convertCameraImage(cameraImage);
+      final rotated = _rotateImage(rgbImage, sensorOrientation);
+      final resized = img.copyResize(rotated, width: _inputSize, height: _inputSize);
+      final input = _buildInputTensor(resized);
+
+      final numLocations = _interpreter!.getOutputTensor(0).shape[1];
+      final outputLocations = List<List<List<double>>>.generate(1, (_) => List<List<double>>.generate(numLocations, (_) => List<double>.filled(4, 0.0)));
+      final outputClasses = List<List<double>>.generate(1, (_) => List<double>.filled(numLocations, 0.0));
+      final outputScores = List<List<double>>.generate(1, (_) => List<double>.filled(numLocations, 0.0));
+      final outputNumDet = List<double>.filled(1, 0.0);
+
+      final outputs = {
+        0: outputLocations,
+        1: outputClasses,
+        2: outputScores,
+        3: outputNumDet,
+      };
+
+      _interpreter!.runForMultipleInputs([input], outputs);
+
+      final numDetections = outputNumDet[0].toInt().clamp(0, numLocations);
       final objects = <DetectedObject>[];
-      for (final item in raw) {
-        if (item is! Map) continue;
-        final name = (item['name'] ?? '').toString().trim();
-        if (name.isEmpty) continue;
 
-        // Gemini returns 0–1000; convert to 0.0–1.0
-        final xmin = _toDouble(item['xmin']) / 1000.0;
-        final ymin = _toDouble(item['ymin']) / 1000.0;
-        final xmax = _toDouble(item['xmax']) / 1000.0;
-        final ymax = _toDouble(item['ymax']) / 1000.0;
+      for (int i = 0; i < numDetections; i++) {
+        final score = outputScores[0][i];
+        if (score < _confidenceThreshold) continue;
 
-        // Clamp & validate
-        final l = xmin.clamp(0.0, 1.0);
-        final t = ymin.clamp(0.0, 1.0);
-        final r = xmax.clamp(0.0, 1.0);
-        final b = ymax.clamp(0.0, 1.0);
+        final classIdx = outputClasses[0][i].toInt();
+        if (classIdx < 0 || classIdx >= _labels.length) continue;
 
-        if (r <= l || b <= t) continue; // degenerate box
+        final label = _labels[classIdx];
+        if (label.isEmpty || label == 'n/a') continue;
+
+        final top = outputLocations[0][i][0].clamp(0.0, 1.0);
+        final left = outputLocations[0][i][1].clamp(0.0, 1.0);
+        final bottom = outputLocations[0][i][2].clamp(0.0, 1.0);
+        final right = outputLocations[0][i][3].clamp(0.0, 1.0);
+
+        if (right <= left || bottom <= top) continue;
 
         objects.add(DetectedObject(
-          name: name,
-          left: l,
-          top: t,
-          width: r - l,
-          height: b - t,
+          name: label,
+          left: left,
+          top: top,
+          width: right - left,
+          height: bottom - top,
         ));
       }
 
-      print('✅ Parsed ${objects.length} object(s): ${objects.map((o) => o.name).join(', ')}');
+      // Sort by area size (larger = closer)
+      objects.sort((a, b) {
+        final areaA = a.width * a.height;
+        final areaB = b.width * b.height;
+        return areaB.compareTo(areaA);
+      });
+
       return ObjectRecognitionResult(objects: objects);
     } catch (e) {
-      print('❌ Parse error: $e');
-      return const ObjectRecognitionResult(objects: []);
+      debugPrint('[ObjRecog] Detection error: $e');
+      return null;
     }
   }
 
-  double _toDouble(dynamic v) {
-    if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString()) ?? 0.0;
+  img.Image _convertCameraImage(CameraImage camera) {
+    final int w = camera.width;
+    final int h = camera.height;
+    final yPlane = camera.planes[0];
+    final uPlane = camera.planes[1];
+    final vPlane = camera.planes[2];
+    final int uvRowStride = uPlane.bytesPerRow;
+    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
+
+    final image = img.Image(width: w, height: h);
+
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        final int yIndex = y * yPlane.bytesPerRow + x;
+        final int uvIndex = uvPixelStride * (x ~/ 2) + uvRowStride * (y ~/ 2);
+
+        final int yVal = yPlane.bytes[yIndex];
+        final int uVal = uvIndex < uPlane.bytes.length ? uPlane.bytes[uvIndex] : 128;
+        final int vVal = uvIndex < vPlane.bytes.length ? vPlane.bytes[uvIndex] : 128;
+
+        int r = (yVal + 1.370705 * (vVal - 128)).round().clamp(0, 255);
+        int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128)).round().clamp(0, 255);
+        int b = (yVal + 1.732446 * (uVal - 128)).round().clamp(0, 255);
+
+        image.setPixelRgb(x, y, r, g, b);
+      }
+    }
+    return image;
+  }
+
+  img.Image _rotateImage(img.Image image, int sensorOrientation) {
+    if (sensorOrientation == 0) return image;
+    return img.copyRotate(image, angle: sensorOrientation);
+  }
+
+  List<List<List<List<int>>>> _buildInputTensor(img.Image resized) {
+    return List<List<List<List<int>>>>.generate(
+      1,
+      (_) => List<List<List<int>>>.generate(
+        _inputSize,
+        (y) => List<List<int>>.generate(_inputSize, (x) {
+          final pixel = resized.getPixel(x, y);
+          return <int>[pixel.r.toInt(), pixel.g.toInt(), pixel.b.toInt()];
+        }),
+      ),
+    );
   }
 }

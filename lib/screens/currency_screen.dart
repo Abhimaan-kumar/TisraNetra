@@ -163,15 +163,8 @@ class _CurrencyScreenState extends State<CurrencyScreen>
       await _cam!.setFocusMode(FocusMode.auto);
       await Future.delayed(const Duration(milliseconds: 600));
       final photo = await _cam!.takePicture();
-      final bytes = await photo.readAsBytes();
-      if (bytes.length < 50000) {
-        setState(() {
-          _detecting = false;
-          _status = 'Image too small, retrying…';
-        });
-        return;
-      }
-      final result = await _svc.detectCurrency(bytes);
+      // Offload to local offline ML Kit text engine
+      final result = await _svc.detectCurrency(photo.path);
       if (!mounted) return;
       if (result != null && result.detectedNotes.isNotEmpty) {
         setState(() {

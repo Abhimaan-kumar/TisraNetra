@@ -1,6 +1,5 @@
-import 'dart:convert';
-import 'dart:typed_data';
-import 'package:http/http.dart' as http;
+import 'dart:math';
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
 class ColorResult {
@@ -17,258 +16,95 @@ class ColorResult {
   });
 }
 
-class ColorService {
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY'; 
+class NamedColor {
+  final String name;
+  final int r, g, b;
+  const NamedColor(this.name, this.r, this.g, this.b);
+  Color get color => Color.fromARGB(255, r, g, b);
+}
 
-  // ✅ Lite first (higher free quota), flash as fallback
-  static const List<String> _models = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
+class ColorService {
+  static const List<NamedColor> _palette = [
+    NamedColor('Red', 229, 57, 53),
+    NamedColor('Orange', 251, 140, 0),
+    NamedColor('Yellow', 253, 216, 53),
+    NamedColor('Green', 67, 160, 71),
+    NamedColor('Blue', 30, 136, 229),
+    NamedColor('Purple', 142, 36, 170),
+    NamedColor('Pink', 233, 30, 99),
+    NamedColor('Brown', 109, 76, 65),
+    NamedColor('Black', 33, 33, 33),
+    NamedColor('White', 250, 250, 250),
+    NamedColor('Grey', 117, 117, 117),
+    NamedColor('Teal', 0, 137, 123),
+    NamedColor('Navy', 26, 35, 126),
+    NamedColor('Beige', 215, 204, 200),
   ];
 
-  static const String _baseUrl =
-      'https://generativelanguage.googleapis.com/v1beta/models';
+  Future<ColorResult?> identifyColor(CameraImage image) async {
+    // Fast center pixel sampling
+    final int cx = image.width ~/ 2;
+    final int cy = image.height ~/ 2;
+    // Average a 21x21 block around the center to avoid noise
+    int rSum = 0, gSum = 0, bSum = 0;
+    int count = 0;
+    
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+    
+    final uvRowStride = uPlane.bytesPerRow;
+    final uvPixelStride = uPlane.bytesPerPixel ?? 1;
 
-  String? _workingModel;
+    for (int y = cy - 10; y <= cy + 10; y++) {
+      for (int x = cx - 10; x <= cx + 10; x++) {
+        if (x < 0 || x >= image.width || y < 0 || y >= image.height) continue;
+        
+        final int yIndex = y * yPlane.bytesPerRow + x;
+        final int uvIndex = uvPixelStride * (x ~/ 2) + uvRowStride * (y ~/ 2);
 
-  Future<ColorResult?> identifyColor(Uint8List imageBytes) async {
-    // Use cached working model first
-    if (_workingModel != null) {
-      try {
-        return await _callModel(_workingModel!, imageBytes);
-      } catch (e) {
-        final msg = e.toString().toLowerCase();
-        if (msg.contains('quota') || msg.contains('429') ||
-            msg.contains('rate')) {
-          _workingModel = null; // reset and try next model
-        } else {
-          rethrow;
-        }
+        final int yVal = yPlane.bytes[yIndex];
+        final int uVal = uvIndex < uPlane.bytes.length ? uPlane.bytes[uvIndex] : 128;
+        final int vVal = uvIndex < vPlane.bytes.length ? vPlane.bytes[uvIndex] : 128;
+
+        int r = (yVal + 1.370705 * (vVal - 128)).round().clamp(0, 255);
+        int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128)).round().clamp(0, 255);
+        int b = (yVal + 1.732446 * (uVal - 128)).round().clamp(0, 255);
+
+        rSum += r;
+        gSum += g;
+        bSum += b;
+        count++;
       }
     }
-
-    // Try each model until one works
-    for (final model in _models) {
-      try {
-        print('🔄 Trying: $model');
-        final result = await _callModel(model, imageBytes);
-        if (result != null) {
-          _workingModel = model;
-          print('✅ Using: $model');
-          return result;
-        }
-      } catch (e) {
-        final msg = e.toString().toLowerCase();
-        if (msg.contains('quota') || msg.contains('429') ||
-            msg.contains('rate')) {
-          print('⏳ Quota hit on $model, trying next...');
-          continue;
-        }
-        rethrow;
+    
+    if (count == 0) return null;
+    
+    final int avgR = rSum ~/ count;
+    final int avgG = gSum ~/ count;
+    final int avgB = bSum ~/ count;
+    
+    NamedColor closest = _palette.first;
+    double minDist = double.infinity;
+    
+    for (final c in _palette) {
+      final dist = _colorDistance(avgR, avgG, avgB, c.r, c.g, c.b);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = c;
       }
     }
-
-    throw Exception(
-        'All models quota exceeded. Please wait and try again.');
-  }
-
-  Future<ColorResult?> _callModel(
-      String model, Uint8List imageBytes) async {
-    final base64Image = base64Encode(imageBytes);
-
-    const prompt = '''
-Look at the CENTER of this image.
-What is the single most dominant color of the main object?
-
-Reply with ONLY one of these base colors:
-red, orange, yellow, green, blue, purple, pink, brown, black, white, grey, beige, gold, silver, teal
-
-Then optionally add ONE shade word before it: dark, light, bright, deep, pale, neon.
-
-Rules:
-- Reply with ONLY 1 to 3 words
-- No sentences, no punctuation, no explanation
-- Examples: "red", "dark blue", "light green", "bright yellow", "pale pink"
-- If unsure between two colors, pick the most obvious one
-''';
-
-    final body = jsonEncode({
-      'contents': [
-        {
-          'parts': [
-            {
-              'inline_data': {
-                'mime_type': 'image/jpeg',
-                'data': base64Image,
-              }
-            },
-            {'text': prompt}
-          ]
-        }
-      ],
-      'generationConfig': {
-        'temperature': 0.0,
-        'maxOutputTokens': 10,
-      },
-    });
-
-    final url =
-        Uri.parse('$_baseUrl/$model:generateContent?key=$_apiKey');
-
-    print('📡 POST → $model');
-    final response = await http
-        .post(url,
-            headers: {'Content-Type': 'application/json'},
-            body: body)
-        .timeout(const Duration(seconds: 20));
-
-    print('📥 ${response.statusCode} ← $model');
-    print('📄 Body: ${response.body}');
-
-    // Quota hit
-    if (response.statusCode == 429 ||
-        (response.statusCode != 200 &&
-            response.body.contains('quota'))) {
-      throw Exception('Quota exceeded for $model. ${response.body}');
-    }
-
-    if (response.statusCode != 200) {
-      final err = jsonDecode(response.body);
-      throw Exception(
-          err['error']?['message'] ?? 'HTTP ${response.statusCode}');
-    }
-
-    final json = jsonDecode(response.body);
-
-    final candidates = json['candidates'];
-    if (candidates == null ||
-        candidates is! List ||
-        candidates.isEmpty) {
-      print('⚠️ No candidates');
-      return null;
-    }
-
-    final finishReason =
-        candidates[0]['finishReason']?.toString() ?? '';
-    print('🏁 Finish: $finishReason');
-    if (finishReason == 'SAFETY') {
-      print('🔒 Safety block');
-      return null;
-    }
-
-    final parts = candidates[0]?['content']?['parts'];
-    if (parts == null || parts is! List || parts.isEmpty) {
-      print('⚠️ No parts');
-      return null;
-    }
-
-    // Extract raw text
-    String rawColor = parts
-        .where((p) => p != null && p['text'] != null)
-        .map((p) => p['text'].toString())
-        .join(' ')
-        .trim()
-        .toLowerCase();
-
-    print('🎨 Raw: "$rawColor"');
-
-    // Clean sentence fragments model might add
-    rawColor = rawColor
-        .replaceAll(
-            RegExp(
-                r'the (main |dominant |primary )?color (of .+)?is\s*',
-                caseSensitive: false),
-            '')
-        .replaceAll(RegExp(r'[.!?,]'), '')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-
-    print('🎨 Cleaned: "$rawColor"');
-
-    if (rawColor.isEmpty || rawColor.length < 2) {
-      print('⚠️ Too short');
-      return null;
-    }
-
-    // Validate must contain known color word
-    final validated = _validateColor(rawColor);
-    if (validated == null) {
-      print('⚠️ Not a valid color: "$rawColor"');
-      return null;
-    }
-
-    print('✅ Validated: "$validated"');
-
-    final displayColor = colorFromName(validated);
-    final spoken =
-        validated[0].toUpperCase() + validated.substring(1);
-
+    
     return ColorResult(
-      dominantColor: validated,
-      allColors: [validated],
-      description: spoken,
-      displayColor: displayColor,
+      dominantColor: closest.name.toLowerCase(),
+      allColors: [closest.name.toLowerCase()],
+      description: closest.name,
+      displayColor: closest.color,
     );
   }
 
-  String? _validateColor(String text) {
-    const baseColors = [
-      'red', 'orange', 'yellow', 'green', 'blue', 'purple',
-      'pink', 'brown', 'black', 'white', 'grey', 'gray',
-      'beige', 'gold', 'silver', 'teal', 'cyan', 'navy',
-      'maroon', 'olive', 'magenta', 'coral', 'cream', 'indigo',
-      'violet', 'turquoise', 'peach', 'lavender', 'mint',
-      'charcoal', 'ivory', 'tan', 'khaki',
-    ];
-
-    const shades = [
-      'dark', 'light', 'bright', 'deep', 'pale',
-      'soft', 'neon', 'vivid',
-    ];
-
-    final lower = text.toLowerCase();
-    for (final c in baseColors) {
-      if (lower.contains(c)) {
-        for (final s in shades) {
-          if (lower.contains('$s $c')) return '$s $c';
-        }
-        return c;
-      }
-    }
-    return null;
-  }
-
-  Color colorFromName(String name) {
-    final n = name.toLowerCase();
-    if (n.contains('red')) return const Color(0xFFE53935);
-    if (n.contains('orange')) return const Color(0xFFFB8C00);
-    if (n.contains('yellow')) return const Color(0xFFFDD835);
-    if (n.contains('green')) return const Color(0xFF43A047);
-    if (n.contains('navy') || n.contains('indigo'))
-      return const Color(0xFF1A237E);
-    if (n.contains('blue')) return const Color(0xFF1E88E5);
-    if (n.contains('purple') || n.contains('violet'))
-      return const Color(0xFF8E24AA);
-    if (n.contains('pink') || n.contains('magenta'))
-      return const Color(0xFFE91E8C);
-    if (n.contains('brown') || n.contains('maroon'))
-      return const Color(0xFF6D4C41);
-    if (n.contains('black') || n.contains('charcoal'))
-      return const Color(0xFF212121);
-    if (n.contains('white') || n.contains('ivory') ||
-        n.contains('cream')) return const Color(0xFFFAFAFA);
-    if (n.contains('grey') || n.contains('gray') ||
-        n.contains('silver')) return const Color(0xFF757575);
-    if (n.contains('teal') || n.contains('cyan') ||
-        n.contains('turquoise')) return const Color(0xFF00897B);
-    if (n.contains('beige') || n.contains('tan') ||
-        n.contains('khaki')) return const Color(0xFFD7CCC8);
-    if (n.contains('gold')) return const Color(0xFFFFB300);
-    if (n.contains('coral') || n.contains('peach'))
-      return const Color(0xFFFF7043);
-    if (n.contains('mint') || n.contains('olive'))
-      return const Color(0xFF66BB6A);
-    if (n.contains('lavender')) return const Color(0xFF9575CD);
-    return const Color(0xFF9E9E9E);
+  double _colorDistance(int r1, int g1, int b1, int r2, int g2, int b2) {
+    // Euclidean distance in RGB space
+    return sqrt(pow(r1 - r2, 2) + pow(g1 - g2, 2) + pow(b1 - b2, 2));
   }
 }
