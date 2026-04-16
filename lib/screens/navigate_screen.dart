@@ -3,8 +3,10 @@
 // Smart Navigation Screen with two modes:
 //   ┌─────────────────────────────────────────────────┐
 //   │ Walk Mode     — Real-time obstacle detection +  │
-//   │                 directional guidance +           │
-//   │                 face recognition                 │
+//   │                 directional guidance +          │
+//   │                 depth estimation +              │
+//   │                 path boundary lines +           │
+//   │                 face recognition                │
 //   │ Destination   — Voice-activated turn-by-turn    │
 //   │   Mode          navigation with safety overlay  │
 //   └─────────────────────────────────────────────────┘
@@ -14,7 +16,6 @@
 
 import 'dart:async';
 import 'dart:typed_data';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -22,6 +23,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../services/nav_object_detection_service.dart';
+import '../services/depth_estimation_service.dart';
 import '../services/path_analyzer_service.dart';
 import '../services/navigation_service.dart';
 import '../services/face_embedding_service.dart';
@@ -47,6 +49,8 @@ const _kRed = Color(0xFFFF3D71);
 const _kSurface = Color(0xFF141929);
 const _kCard = Color(0xFF1C2137);
 const _kCardBorder = Color(0xFF2A3050);
+const _kCyan = Color(0xFF00E5FF);
+const _kOrange = Color(0xFFFF9100);
 
 enum _NavMode { modeSelect, walkMode, destinationMode }
 
@@ -252,7 +256,7 @@ class _NavigateScreenState extends State<NavigateScreen>
 
   Future<void> _processFrame(CameraImage image) async {
     try {
-      // 1. Object detection
+      // 1. Object detection (with integrated depth estimation)
       final detections =
           _detectionService.detect(image, _sensorOrientation);
 
@@ -263,7 +267,7 @@ class _NavigateScreenState extends State<NavigateScreen>
          structuralBlocker = await _sceneLabeler.detectStructuralBlockage(inputImage);
       }
 
-      // 3. Path analysis
+      // 3. Path analysis (with boundary lines + urgency)
       final analysis = _pathAnalyzer.analyze(detections, structuralBlocker: structuralBlocker);
 
       // 4. Face recognition (if person detected)
@@ -282,10 +286,10 @@ class _NavigateScreenState extends State<NavigateScreen>
         }
       });
 
-      // 4. Speak guidance based on priority
+      // 5. Speak guidance with urgency-aware TTS
       if (_walkActive || _navActive) {
         if (_pathAnalyzer.shouldSpeak(analysis)) {
-          await _tts.speak(analysis.guidance);
+          await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
         }
         // Announce identified face
         if (faceName != null) {
@@ -559,8 +563,16 @@ class _NavigateScreenState extends State<NavigateScreen>
                 .speak(hi ? 'कुछ नहीं दिख रहा।' : 'Nothing detected ahead.');
           } else {
             final names =
-                _detections.take(5).map((d) => d.label).toSet().join(', ');
+                _detections.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
             await _tts.speak(hi ? 'सामने: $names।' : 'Ahead: $names.');
+          }
+        } else if (c.contains('how far') || c.contains('distance') || c.contains('kitna door')) {
+          if (_pathAnalysis?.closestDistanceLabel != null) {
+            await _tts.speak(hi
+                ? 'सबसे करीब ${_pathAnalysis!.closestDistanceLabel}।'
+                : 'Closest obstacle at ${_pathAnalysis!.closestDistanceLabel}.');
+          } else {
+            await _tts.speak(hi ? 'कोई बाधा नहीं।' : 'No obstacles detected.');
           }
         } else if (c.contains('who') || c.contains('kaun')) {
           if (_lastFaceName.isNotEmpty) {
@@ -573,8 +585,8 @@ class _NavigateScreenState extends State<NavigateScreen>
           }
         } else {
           await _tts.speak(hi
-              ? 'बोलें: "stop", "what is ahead", या "back"।'
-              : 'Say stop, what is ahead, who is that, or back.');
+              ? 'बोलें: "stop", "what is ahead", "how far", या "back"।'
+              : 'Say stop, what is ahead, how far, who is that, or back.');
         }
         break;
 
@@ -849,7 +861,8 @@ class _NavigateScreenState extends State<NavigateScreen>
                 titleHi: 'वॉक मोड',
                 description:
                     'Real-time obstacle detection with directional guidance. '
-                    'AI detects objects, identifies people, and guides you safely.',
+                    'AI detects objects, estimates distance, identifies people, '
+                    'and guides you safely with urgency-aware voice.',
                 color: _kGreen,
                 gradientColors: const [Color(0xFF00E676), Color(0xFF00B248)],
                 onTap: _enterWalkMode,
@@ -981,13 +994,13 @@ class _NavigateScreenState extends State<NavigateScreen>
   Widget _buildWalkModeView() {
     return Column(
       children: [
-        // Camera + detection overlay
+        // Camera + detection overlay + path boundary lines
         Expanded(flex: 5, child: _buildCameraPreview()),
         // Zone indicator
         _buildZoneIndicator(),
-        // Status / guidance
+        // Status / guidance with distance info
         _buildGuidancePanel(),
-        // Detected objects chips
+        // Detected objects chips with distance
         if (_detections.isNotEmpty) _buildDetectionChips(),
         // Controls
         _buildWalkControls(),
@@ -1011,16 +1024,17 @@ class _NavigateScreenState extends State<NavigateScreen>
         // Camera preview
         CameraPreview(_cam!),
 
-        // Bounding box overlay
-        if (_detections.isNotEmpty)
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _NavBBoxPainter(
-                objects: _detections,
-                faceName: _lastFaceName,
-              ),
+        // Path boundary lines + bounding boxes + distance labels overlay
+        Positioned.fill(
+          child: CustomPaint(
+            painter: _NavOverlayPainter(
+              objects: _detections,
+              faceName: _lastFaceName,
+              pathBoundary: _pathAnalysis?.pathBoundary,
+              urgency: _pathAnalysis?.urgency ?? VoiceUrgency.low,
             ),
           ),
+        ),
 
         // Walk active indicator
         if (_walkActive)
@@ -1057,6 +1071,41 @@ class _NavigateScreenState extends State<NavigateScreen>
             ),
           ),
 
+        // Closest distance badge
+        if (_pathAnalysis?.closestDistanceLabel != null)
+          Positioned(
+            top: 8,
+            left: 60,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _urgencyColor(_pathAnalysis?.urgency ?? VoiceUrgency.low)
+                      .withOpacity(0.6),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.straighten,
+                      color: _urgencyColor(_pathAnalysis?.urgency ?? VoiceUrgency.low),
+                      size: 12),
+                  const SizedBox(width: 4),
+                  Text(
+                    _pathAnalysis!.closestDistanceLabel!,
+                    style: GoogleFonts.inter(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
         // Listening indicator
         if (isMixinListening)
           Positioned(
@@ -1082,6 +1131,19 @@ class _NavigateScreenState extends State<NavigateScreen>
           ),
       ],
     );
+  }
+
+  Color _urgencyColor(VoiceUrgency urgency) {
+    switch (urgency) {
+      case VoiceUrgency.critical:
+        return _kRed;
+      case VoiceUrgency.high:
+        return _kOrange;
+      case VoiceUrgency.medium:
+        return _kYellow;
+      case VoiceUrgency.low:
+        return _kGreen;
+    }
   }
 
   Widget _buildZoneIndicator() {
@@ -1149,13 +1211,26 @@ class _NavigateScreenState extends State<NavigateScreen>
           Icon(guidanceIcon, color: guidanceColor, size: 24),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              _walkStatus,
-              style: GoogleFonts.inter(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _walkStatus,
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (analysis?.closestDistanceLabel != null)
+                  Text(
+                    'Nearest: ${analysis!.closestDistanceLabel}',
+                    style: GoogleFonts.inter(
+                      color: guidanceColor.withOpacity(0.8),
+                      fontSize: 11,
+                    ),
+                  ),
+              ],
             ),
           ),
           if (_detections.isNotEmpty)
@@ -1212,10 +1287,10 @@ class _NavigateScreenState extends State<NavigateScreen>
             ),
             child: Center(
               child: Text(
-                det.label,
+                '${det.label} ${det.distanceLabel}',
                 style: GoogleFonts.inter(
                   color: chipColor,
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1489,17 +1564,31 @@ class _NavigateScreenState extends State<NavigateScreen>
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Bounding Box Painter for Navigation
+//  Enhanced Overlay Painter — Bounding Boxes + Path Boundary Lines + Distance
 // ═════════════════════════════════════════════════════════════════════════════
 
-class _NavBBoxPainter extends CustomPainter {
+class _NavOverlayPainter extends CustomPainter {
   final List<NavDetectedObject> objects;
   final String? faceName;
+  final PathBoundary? pathBoundary;
+  final VoiceUrgency urgency;
 
-  const _NavBBoxPainter({required this.objects, this.faceName});
+  const _NavOverlayPainter({
+    required this.objects,
+    this.faceName,
+    this.pathBoundary,
+    required this.urgency,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // ── 1. Draw path boundary lines ─────────────────────────────────────────
+    _drawPathBoundaryLines(canvas, size);
+
+    // ── 2. Draw zone dividers (faint) ───────────────────────────────────────
+    _drawZoneDividers(canvas, size);
+
+    // ── 3. Draw bounding boxes with distance labels ─────────────────────────
     for (int i = 0; i < objects.length; i++) {
       final obj = objects[i];
 
@@ -1524,31 +1613,42 @@ class _NavBBoxPainter extends CustomPainter {
         obj.boundingBox.bottom * size.height,
       );
 
+      // Draw semi-transparent fill for close objects
+      if (obj.proximityZone == ProximityZone.veryClose ||
+          obj.proximityZone == ProximityZone.close) {
+        canvas.drawRect(
+          rect,
+          Paint()
+            ..color = color.withOpacity(0.08)
+            ..style = PaintingStyle.fill,
+        );
+      }
+
       // Draw box
       canvas.drawRect(
         rect,
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5,
+          ..strokeWidth = obj.proximityZone == ProximityZone.veryClose ? 3.5 : 2.5,
       );
 
       // Draw corners
       _drawCorners(canvas, rect, color);
 
-      // Label
+      // Label with distance
       String label = obj.label;
       if (obj.label == 'person' && faceName != null && faceName!.isNotEmpty) {
         label = faceName!;
       }
-      label = '  $label (${(obj.confidence * 100).toStringAsFixed(0)}%)  ';
+      label = '  $label ${obj.distanceLabel} (${(obj.confidence * 100).toStringAsFixed(0)}%)  ';
 
       final tp = TextPainter(
         text: TextSpan(
           text: label,
           style: TextStyle(
             color: Colors.black,
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
             background: Paint()..color = color,
           ),
@@ -1563,7 +1663,185 @@ class _NavBBoxPainter extends CustomPainter {
           rect.top > tp.height + 4 ? rect.top - tp.height - 4 : rect.top + 4,
         ),
       );
+
+      // Draw distance indicator bar at bottom of bbox
+      _drawDistanceBar(canvas, rect, obj, color);
     }
+  }
+
+  void _drawPathBoundaryLines(Canvas canvas, Size size) {
+    if (pathBoundary == null) return;
+
+    final leftX = pathBoundary!.leftLineX * size.width;
+    final rightX = pathBoundary!.rightLineX * size.width;
+
+    // Determine colour based on corridor width
+    final corridorFraction = pathBoundary!.corridorWidth;
+    final Color lineColor;
+    if (corridorFraction > 0.40) {
+      lineColor = _kCyan; // Wide safe corridor
+    } else if (corridorFraction > 0.20) {
+      lineColor = _kYellow; // Narrowing
+    } else {
+      lineColor = _kRed; // Very narrow / blocked
+    }
+
+    // Left boundary line
+    final leftPaint = Paint()
+      ..color = lineColor.withOpacity(0.7)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+
+    // Draw dashed lines for path boundaries
+    _drawDashedLine(
+      canvas,
+      Offset(leftX, size.height * 0.15),
+      Offset(leftX, size.height * 0.95),
+      leftPaint,
+    );
+
+    // Right boundary line
+    _drawDashedLine(
+      canvas,
+      Offset(rightX, size.height * 0.15),
+      Offset(rightX, size.height * 0.95),
+      leftPaint,
+    );
+
+    // Draw semi-transparent corridor fill
+    canvas.drawRect(
+      Rect.fromLTRB(leftX, size.height * 0.15, rightX, size.height * 0.95),
+      Paint()
+        ..color = lineColor.withOpacity(0.04)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Draw "SAFE PATH" label at top of corridor
+    if (corridorFraction > 0.15) {
+      final safePaint = TextPainter(
+        text: TextSpan(
+          text: ' SAFE PATH ',
+          style: TextStyle(
+            color: lineColor,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+            background: Paint()..color = Colors.black.withOpacity(0.5),
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      safePaint.paint(
+        canvas,
+        Offset(
+          (leftX + rightX) / 2 - safePaint.width / 2,
+          size.height * 0.12,
+        ),
+      );
+    }
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
+    const dashLength = 10.0;
+    const gapLength = 6.0;
+    final dx = p2.dx - p1.dx;
+    final dy = p2.dy - p1.dy;
+    final totalLength = (dx * dx + dy * dy);
+    if (totalLength == 0) return;
+    final length = totalLength > 0 ? (totalLength as double) : 1.0;
+    final sqrtLen = length > 0 ? _sqrt(length) : 1.0;
+    final unitDx = dx / sqrtLen;
+    final unitDy = dy / sqrtLen;
+
+    double drawn = 0.0;
+    bool isDash = true;
+    while (drawn < sqrtLen) {
+      final segLength = isDash
+          ? dashLength.clamp(0, sqrtLen - drawn)
+          : gapLength.clamp(0, sqrtLen - drawn);
+      if (isDash) {
+        canvas.drawLine(
+          Offset(p1.dx + unitDx * drawn, p1.dy + unitDy * drawn),
+          Offset(
+            p1.dx + unitDx * (drawn + segLength),
+            p1.dy + unitDy * (drawn + segLength),
+          ),
+          paint,
+        );
+      }
+      drawn += segLength;
+      isDash = !isDash;
+    }
+  }
+
+  double _sqrt(double x) {
+    if (x <= 0) return 0;
+    double guess = x / 2;
+    for (int i = 0; i < 20; i++) {
+      guess = (guess + x / guess) / 2;
+    }
+    return guess;
+  }
+
+  void _drawZoneDividers(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.08)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    // Left/centre boundary (33%)
+    canvas.drawLine(
+      Offset(size.width * 0.33, 0),
+      Offset(size.width * 0.33, size.height),
+      paint,
+    );
+    // Centre/right boundary (66%)
+    canvas.drawLine(
+      Offset(size.width * 0.66, 0),
+      Offset(size.width * 0.66, size.height),
+      paint,
+    );
+  }
+
+  void _drawDistanceBar(
+      Canvas canvas, Rect rect, NavDetectedObject obj, Color color) {
+    // Small coloured bar at bottom of bbox showing proximity
+    final barHeight = 3.0;
+    final barWidth = rect.width;
+
+    // Fill fraction based on proximity (closer = more filled)
+    double fillFraction;
+    switch (obj.proximityZone) {
+      case ProximityZone.veryClose:
+        fillFraction = 1.0;
+        break;
+      case ProximityZone.close:
+        fillFraction = 0.7;
+        break;
+      case ProximityZone.near:
+        fillFraction = 0.4;
+        break;
+      case ProximityZone.far:
+        fillFraction = 0.15;
+        break;
+    }
+
+    // Background
+    canvas.drawRect(
+      Rect.fromLTWH(rect.left, rect.bottom + 2, barWidth, barHeight),
+      Paint()
+        ..color = Colors.white.withOpacity(0.15)
+        ..style = PaintingStyle.fill,
+    );
+    // Fill
+    canvas.drawRect(
+      Rect.fromLTWH(rect.left, rect.bottom + 2, barWidth * fillFraction, barHeight),
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
   }
 
   void _drawCorners(Canvas canvas, Rect r, Color c) {
@@ -1584,6 +1862,9 @@ class _NavBBoxPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_NavBBoxPainter old) =>
-      old.objects != objects || old.faceName != faceName;
+  bool shouldRepaint(_NavOverlayPainter old) =>
+      old.objects != objects ||
+      old.faceName != faceName ||
+      old.pathBoundary != pathBoundary ||
+      old.urgency != urgency;
 }
