@@ -100,6 +100,12 @@ class _NavigateScreenState extends State<NavigateScreen>
   String _destStatus = 'Say your destination';
   String _currentInstruction = '';
   bool _navActive = false;
+  NavigationSnapshot? _navSnapshot;
+  bool _isRerouting = false;
+  bool _isApproachingTurn = false;
+
+  // ── Safety vs Route priority ──────────────────────────────────────────────
+  DateTime _lastSafetySpeak = DateTime(2000);
 
   // ── Init state ────────────────────────────────────────────────────────────
   bool _initialized = false;
@@ -164,24 +170,52 @@ class _NavigateScreenState extends State<NavigateScreen>
       // Navigation service callbacks
       _navService.onInstruction = (en, hi) {
         if (!mounted) return;
-        setState(() => _currentInstruction = en);
-        _tts.speak(en);
+        setState(() {
+          _currentInstruction = en;
+        });
+        // Only speak route instructions if no critical safety alert active
+        final safetyRecent = DateTime.now().difference(_lastSafetySpeak).inSeconds < 3;
+        if (!safetyRecent) {
+          _tts.speak(en);
+        }
       };
       _navService.onArrived = () {
         if (!mounted) return;
         setState(() {
           _destStatus = 'You have arrived!';
           _navActive = false;
+          _walkActive = false;
+          _navSnapshot = null;
         });
-        _tts.speak('You have arrived at your destination.');
+        _tts.speak('You have arrived at your destination. Well done!');
       };
       _navService.onStateChange = (state) {
         if (!mounted) return;
         setState(() {
           if (state == NavigationState.error) {
             _destStatus = 'Navigation error. Try again.';
+          } else if (state == NavigationState.rerouting) {
+            _isRerouting = true;
+            _destStatus = 'Recalculating route...';
+          } else if (state == NavigationState.navigating && _isRerouting) {
+            _isRerouting = false;
+            _destStatus = 'Route updated.';
           }
         });
+      };
+      _navService.onNavigationUpdate = (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _navSnapshot = snapshot;
+          _isApproachingTurn = snapshot.isApproachingTurn;
+          if (_navActive) {
+            _destStatus = '${_navService.remainingDistanceText} · ETA ${snapshot.eta}';
+          }
+        });
+      };
+      _navService.onReroute = (message) {
+        if (!mounted) return;
+        _tts.speak(message);
       };
 
       if (!mounted) return;
@@ -286,10 +320,22 @@ class _NavigateScreenState extends State<NavigateScreen>
         }
       });
 
-      // 5. Speak guidance with urgency-aware TTS
+      // 5. Speak guidance — safety alerts take priority over route instructions
       if (_walkActive || _navActive) {
         if (_pathAnalyzer.shouldSpeak(analysis)) {
-          await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+          // In destination mode: safety alerts override route guidance
+          if (_mode == _NavMode.destinationMode && _navActive) {
+            // Only speak safety if critical/high urgency
+            if (analysis.urgency == VoiceUrgency.critical ||
+                analysis.urgency == VoiceUrgency.high) {
+              _lastSafetySpeak = DateTime.now();
+              await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+            }
+            // Medium/low urgency: don't interrupt route instructions
+          } else {
+            // Walk mode: always speak
+            await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+          }
         }
         // Announce identified face
         if (faceName != null) {
@@ -460,6 +506,8 @@ class _NavigateScreenState extends State<NavigateScreen>
   void _exitToModeSelect() {
     _walkActive = false;
     _navActive = false;
+    _isRerouting = false;
+    _navSnapshot = null;
     _navService.stopNavigation();
     _stopCamera();
     setState(() {
@@ -496,11 +544,17 @@ class _NavigateScreenState extends State<NavigateScreen>
         break;
       case _NavMode.destinationMode:
         if (_navActive) {
-          // Repeat current instruction
+          // Repeat current instruction + remaining info
           if (_currentInstruction.isNotEmpty) {
             await _tts.speak(_currentInstruction);
           }
-          await _tts.speak(_navService.getRemainingInfo());
+          final remaining = _navService.getRemainingInfo();
+          await _tts.speak(remaining);
+          // Also announce obstacles if any
+          if (_detections.isNotEmpty) {
+            final names = _detections.take(3).map((d) => d.label).toSet().join(', ');
+            await _tts.speak('Nearby obstacles: $names.');
+          }
         } else {
           await _tts.speak('Say where you want to go.');
         }
@@ -598,6 +652,8 @@ class _NavigateScreenState extends State<NavigateScreen>
           _navService.stopNavigation();
           setState(() {
             _navActive = false;
+            _walkActive = false;
+            _navSnapshot = null;
             _destStatus = 'Navigation cancelled.';
             _currentInstruction = '';
           });
@@ -605,7 +661,9 @@ class _NavigateScreenState extends State<NavigateScreen>
               .speak(hi ? 'नेविगेशन रद्द।' : 'Navigation cancelled.');
         } else if (c.contains('how far') ||
             c.contains('kitna door') ||
-            c.contains('remaining')) {
+            c.contains('remaining') ||
+            c.contains('eta') ||
+            c.contains('time')) {
           await _tts.speak(_navService.getRemainingInfo());
         } else if (c.contains('repeat') ||
             c.contains('again') ||
@@ -613,21 +671,38 @@ class _NavigateScreenState extends State<NavigateScreen>
           if (_currentInstruction.isNotEmpty) {
             await _tts.speak(_currentInstruction);
           }
+        } else if (c.contains('what') ||
+            c.contains('ahead') ||
+            c.contains('obstacle') ||
+            c.contains('samne')) {
+          // Report obstacles while navigating
+          if (_detections.isEmpty) {
+            await _tts.speak(hi ? 'रास्ता साफ है।' : 'Path is clear.');
+          } else {
+            final names = _detections.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
+            await _tts.speak(hi ? 'सामने: $names।' : 'Ahead: $names.');
+          }
         } else if (!_navActive) {
           // Treat the entire command as a destination name
           await _startDestinationNavigation(cmd);
         } else {
           await _tts.speak(hi
-              ? 'बोलें: "stop", "how far", या "repeat"।'
-              : 'Say stop, how far, or repeat instruction.');
+              ? 'बोलें: "stop", "how far", "what is ahead", या "repeat"।'
+              : 'Say stop, how far, what is ahead, or repeat instruction.');
         }
         break;
     }
   }
 
-  Future<void> _startDestinationNavigation(String destination) async {
+  Future<void> _startDestinationNavigation(String command) async {
+    // Clean up destination by removing common STT conversational prefixes
+    String destination = command.toLowerCase()
+        .replaceAll(RegExp(r'^(take me to|navigate to|go to|directions to|i want to go to|mujhe jana hai|rasta batao)\s+', caseSensitive: false), '')
+        .trim();
+
     setState(() {
       _destStatus = 'Finding route to: $destination...';
+      _navSnapshot = null;
     });
     await _tts.speak('Finding route to $destination. Please wait.');
 
@@ -635,23 +710,30 @@ class _NavigateScreenState extends State<NavigateScreen>
     if (!mounted) return;
 
     if (route == null) {
-      setState(() => _destStatus = 'Could not find route. Try again.');
-      await _tts.speak(
-        'Sorry, I could not find a route to $destination. '
-        'Press volume up and say the destination again.',
-      );
+      if (_navService.lastPosition == null) {
+        setState(() => _destStatus = 'Could not get location.');
+        await _tts.speak('Sorry, I could not get your current location. Make sure location services are enabled.');
+      } else {
+        setState(() => _destStatus = 'Could not find route. Try again.');
+        await _tts.speak(
+          'Sorry, I could not find a walking route to $destination. '
+          'Press volume up and say the destination again.',
+        );
+      }
       return;
     }
 
     setState(() {
       _destStatus =
-          'Route: ${route.totalDistance}, ${route.totalDuration}';
+          '${route.totalDistance} · ETA ${route.totalDuration}';
       _navActive = true;
     });
 
     await _tts.speak(
-      'Route found. ${route.totalDistance}, ${route.totalDuration}. '
-      '${route.steps.length} steps. Starting navigation.',
+      'Route found to ${route.destinationAddress}. '
+      '${route.totalDistance}, estimated ${route.totalDuration}. '
+      '${route.steps.length} steps. '
+      'Starting navigation. I will also watch for obstacles.',
     );
 
     _walkActive = true; // Enable obstacle detection during navigation
@@ -1376,15 +1458,56 @@ class _NavigateScreenState extends State<NavigateScreen>
       children: [
         // Camera + safety overlay (same as walk mode)
         Expanded(flex: 4, child: _buildCameraPreview()),
-        // Zone indicator
-        if (_navActive) _buildZoneIndicator(),
+        // Zone indicator with approach highlight
+        if (_navActive) _buildDestZoneIndicator(),
         // Navigation instruction panel
         _buildNavigationPanel(),
+        // ETA / Distance / Progress bar
+        if (_navActive && _navSnapshot != null) _buildNavProgressBar(),
         // Destination status
         _buildDestStatusBar(),
+        // Detected objects chips with distance (when navigating)
+        if (_navActive && _detections.isNotEmpty) _buildDetectionChips(),
         // Controls
         _buildDestControls(),
       ],
+    );
+  }
+
+  Widget _buildDestZoneIndicator() {
+    final left = _pathAnalysis?.leftBlocked ?? false;
+    final center = _pathAnalysis?.centerBlocked ?? false;
+    final right = _pathAnalysis?.rightBlocked ?? false;
+
+    return SizedBox(
+      height: 8,
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              color: left ? _kRed : _kGreen,
+            ),
+          ),
+          Container(width: 2, color: Colors.black),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: center ? _kRed : _kGreen,
+                // Pulsing border when approaching a turn
+                border: _isApproachingTurn
+                    ? Border.all(color: _kOrange, width: 2)
+                    : null,
+              ),
+            ),
+          ),
+          Container(width: 2, color: Colors.black),
+          Expanded(
+            child: Container(
+              color: right ? _kRed : _kGreen,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1417,27 +1540,52 @@ class _NavigateScreenState extends State<NavigateScreen>
       );
     }
 
+    // Determine icon based on next maneuver
+    IconData maneuverIcon = Icons.navigation_rounded;
+    Color panelAccent = _kIndigo;
+    if (_isRerouting) {
+      maneuverIcon = Icons.refresh_rounded;
+      panelAccent = _kOrange;
+    } else if (_navService.nextStep?.maneuver != null) {
+      final m = _navService.nextStep!.maneuver!;
+      if (m.contains('left')) {
+        maneuverIcon = Icons.turn_left_rounded;
+      } else if (m.contains('right')) {
+        maneuverIcon = Icons.turn_right_rounded;
+      } else if (m.contains('uturn')) {
+        maneuverIcon = Icons.u_turn_left_rounded;
+      } else if (m.contains('straight')) {
+        maneuverIcon = Icons.straight_rounded;
+      } else if (m.contains('roundabout')) {
+        maneuverIcon = Icons.roundabout_left_rounded;
+      }
+    }
+
+    // Approaching turn: change panel accent
+    if (_isApproachingTurn) {
+      panelAccent = _kOrange;
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: _kIndigo.withOpacity(0.12),
+        color: panelAccent.withOpacity(0.12),
         border: Border(
-          top: BorderSide(color: _kIndigo.withOpacity(0.4)),
-          bottom: BorderSide(color: _kIndigo.withOpacity(0.4)),
+          top: BorderSide(color: panelAccent.withOpacity(0.4)),
+          bottom: BorderSide(color: panelAccent.withOpacity(0.4)),
         ),
       ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: _kIndigo,
+              color: panelAccent,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.navigation_rounded,
-                color: Colors.white, size: 22),
+            child: Icon(maneuverIcon, color: Colors.white, size: 24),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1445,23 +1593,162 @@ class _NavigateScreenState extends State<NavigateScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _currentInstruction,
+                  _isRerouting ? 'Recalculating route...' : _currentInstruction,
                   style: GoogleFonts.inter(
                     color: Colors.white,
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  _navService.progressText,
-                  style: GoogleFonts.inter(
-                    color: _kIndigoLight,
-                    fontSize: 11,
-                  ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    Text(
+                      _navService.progressText,
+                      style: GoogleFonts.inter(
+                        color: _kIndigoLight,
+                        fontSize: 11,
+                      ),
+                    ),
+                    if (_navSnapshot != null) ...[
+                      const SizedBox(width: 8),
+                      Icon(Icons.straighten, color: _kIndigoLight, size: 11),
+                      const SizedBox(width: 3),
+                      Text(
+                        _navService.remainingDistanceText,
+                        style: GoogleFonts.inter(
+                          color: _kIndigoLight,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
+          ),
+          // ETA badge
+          if (_navSnapshot != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _kGreen.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kGreen.withOpacity(0.3)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    _navSnapshot!.eta,
+                    style: GoogleFonts.inter(
+                      color: _kGreen,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    'ETA',
+                    style: GoogleFonts.inter(
+                      color: _kGreen.withOpacity(0.7),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavProgressBar() {
+    final snapshot = _navSnapshot!;
+    final totalSteps = snapshot.totalSteps;
+    final currentIdx = snapshot.currentStepIndex;
+    final progress = totalSteps > 0 ? (currentIdx / totalSteps) : 0.0;
+
+    // Next turn distance
+    final nextTurnDist = snapshot.distanceToNextTurn;
+    String nextTurnText;
+    if (nextTurnDist < 15) {
+      nextTurnText = 'Now';
+    } else if (nextTurnDist < 100) {
+      nextTurnText = '${nextTurnDist.round()} m';
+    } else {
+      nextTurnText = '${(nextTurnDist / 1000).toStringAsFixed(1)} km';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: _kCard,
+      child: Column(
+        children: [
+          // Progress bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 4,
+              backgroundColor: _kCardBorder,
+              valueColor: AlwaysStoppedAnimation(
+                _isApproachingTurn ? _kOrange : _kIndigo,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Next turn distance
+              Row(
+                children: [
+                  Icon(
+                    _isApproachingTurn
+                        ? Icons.warning_amber_rounded
+                        : Icons.swap_calls_rounded,
+                    color: _isApproachingTurn ? _kOrange : Colors.white54,
+                    size: 14,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Next turn: $nextTurnText',
+                    style: GoogleFonts.inter(
+                      color: _isApproachingTurn ? _kOrange : Colors.white54,
+                      fontSize: 11,
+                      fontWeight: _isApproachingTurn
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+              // Step counter
+              Text(
+                '${currentIdx + 1} / $totalSteps',
+                style: GoogleFonts.inter(
+                  color: Colors.white38,
+                  fontSize: 11,
+                ),
+              ),
+              // Remaining distance
+              Row(
+                children: [
+                  const Icon(Icons.flag_outlined,
+                      color: Colors.white54, size: 13),
+                  const SizedBox(width: 3),
+                  Text(
+                    _navService.remainingDistanceText,
+                    style: GoogleFonts.inter(
+                      color: Colors.white54,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ],
       ),
@@ -1473,12 +1760,44 @@ class _NavigateScreenState extends State<NavigateScreen>
       width: double.infinity,
       color: _kSurface,
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14),
-      child: Text(
-        _destStatus,
-        style: GoogleFonts.inter(
-          color: _navActive ? _kGreen : Colors.white60,
-          fontSize: 12,
-        ),
+      child: Row(
+        children: [
+          if (_isRerouting)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: _kOrange,
+                ),
+              ),
+            ),
+          Expanded(
+            child: Text(
+              _destStatus,
+              style: GoogleFonts.inter(
+                color: _isRerouting
+                    ? _kOrange
+                    : _navActive
+                        ? _kGreen
+                        : Colors.white60,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          if (_navActive && _navService.currentRoute != null)
+            Text(
+              _navService.currentRoute!.destinationAddress.length > 25
+                  ? '${_navService.currentRoute!.destinationAddress.substring(0, 25)}…'
+                  : _navService.currentRoute!.destinationAddress,
+              style: GoogleFonts.inter(
+                color: Colors.white30,
+                fontSize: 10,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1498,6 +1817,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                   setState(() {
                     _navActive = false;
                     _walkActive = false;
+                    _navSnapshot = null;
                     _destStatus = 'Navigation stopped.';
                     _currentInstruction = '';
                   });
@@ -1517,7 +1837,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                 ),
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: () {
@@ -1525,9 +1845,9 @@ class _NavigateScreenState extends State<NavigateScreen>
                     _tts.speak(_currentInstruction);
                   }
                 },
-                icon: const Icon(Icons.replay, size: 20),
+                icon: const Icon(Icons.replay, size: 18),
                 label: Text('Repeat',
-                    style: GoogleFonts.inter(fontSize: 13)),
+                    style: GoogleFonts.inter(fontSize: 12)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _kCard,
                   foregroundColor: Colors.white,
@@ -1536,6 +1856,26 @@ class _NavigateScreenState extends State<NavigateScreen>
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // ETA / info button
+            SizedBox(
+              width: 48,
+              height: 48,
+              child: ElevatedButton(
+                onPressed: () {
+                  _tts.speak(_navService.getRemainingInfo());
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kCard,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: const Icon(Icons.schedule_rounded, size: 22),
               ),
             ),
           ] else ...[
@@ -1750,8 +2090,7 @@ class _NavOverlayPainter extends CustomPainter {
     final dy = p2.dy - p1.dy;
     final totalLength = (dx * dx + dy * dy);
     if (totalLength == 0) return;
-    final length = totalLength > 0 ? (totalLength as double) : 1.0;
-    final sqrtLen = length > 0 ? _sqrt(length) : 1.0;
+    final sqrtLen = _sqrt(totalLength);
     final unitDx = dx / sqrtLen;
     final unitDy = dy / sqrtLen;
 
