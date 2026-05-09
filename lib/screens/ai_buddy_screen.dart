@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/tts_service.dart';
 import '../services/volume_button_service.dart';
 import '../theme/app_theme.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'registration.dart';
 import 'profile_screen.dart';
 
@@ -64,7 +65,11 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
 
 
   void _initializeGemini() {
-  const String apiKey = 'REDACTED_PRIVATE_API_KEY';
+    final String apiKey = dotenv.env['GEMINI_API_KEY'] ?? '';
+    if (apiKey.isEmpty) {
+      debugPrint('No \$GEMINI_API_KEY environment variable set.');
+      return;
+    }
 
   const String systemPrompt = '''
 You are a helpful personal buddy named Life Lens that will be used by blinds people.
