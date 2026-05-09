@@ -1,4 +1,4 @@
-﻿// lib/screens/object_recognition_screen.dart
+// lib/screens/object_recognition_screen.dart
 import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -48,7 +48,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   }
   @override void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _keepScanning = false; _cam?.dispose(); _tts.dispose();
+    _keepScanning = false; _cam?.dispose(); _tts.dispose(); _svc.dispose();
     super.dispose();
   }
 
@@ -75,10 +75,11 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   // ── Camera ───────────────────────────────────────────────────────────────
   Future<void> _initCamera() async {
     try {
+      await _svc.init();
       _cameras = await availableCameras();
       if (_cameras.isEmpty) { setState(() => _status = 'No camera'); return; }
       final ctrl = CameraController(_cameras.first, ResolutionPreset.medium,
-          enableAudio: false, imageFormatGroup: ImageFormatGroup.jpeg);
+          enableAudio: false, imageFormatGroup: ImageFormatGroup.yuv420);
       await ctrl.initialize();
       await ctrl.setFocusMode(FocusMode.auto);
       await ctrl.setExposureMode(ExposureMode.auto);
@@ -94,55 +95,65 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
     _keepScanning = true;
     setState(() { _scanning = true; _status = 'Scanning…'; });
     _tts.speak('Scanning started.');
-    _loop();
+    if (!mounted || !_camReady || _cam == null) return;
+    _cam!.startImageStream((image) => _processFrame(image));
   }
 
   void _stopScan() {
     _keepScanning = false;
     setState(() { _scanning = false; _status = 'Paused.'; });
     _tts.speak('Scanning paused.');
-  }
-
-  Future<void> _loop() async {
-    while (_keepScanning && mounted) {
-      await _scanOnce();
-      if (_keepScanning && mounted) await Future.delayed(const Duration(seconds: 2));
+    if (_cam?.value.isStreamingImages ?? false) {
+      _cam!.stopImageStream();
     }
   }
 
-  Future<void> _scanOnce() async {
-    if (_recognizing || !_camReady || _cam == null) return;
-    _scanNo++;
-    setState(() { _recognizing = true; _status = 'Scan #$_scanNo — analyzing…'; });
+  DateTime _lastProcessTime = DateTime.now();
+  DateTime _lastSpeakTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _processFrame(CameraImage image) async {
+    if (_recognizing || !_scanning || !mounted) return;
+    
+    // Run detection every 300ms for real-time bounding boxes
+    if (DateTime.now().difference(_lastProcessTime).inMilliseconds < 300) return;
+    
+    _recognizing = true;
+    _lastProcessTime = DateTime.now();
+    
     try {
-      final photo = await _cam!.takePicture();
-      final bytes = await photo.readAsBytes();
-      final result = await _svc.recognizeObjects(bytes);
+      final result = await _svc.recognizeObjects(image, _cam!.description.sensorOrientation);
       if (!mounted) return;
-      if (result != null && result.objects.isNotEmpty) {
+      
+      if (result == null || result.objects.isEmpty) {
+        setState(() { 
+          _last = null; 
+          _status = 'Scanning area...'; 
+        });
+      } else {
         _successNo++;
+        setState(() {
+          _last = result;
+          _status = '${result.objects.length} object(s) detected';
+        });
+
+        final timeSinceSpeak = DateTime.now().difference(_lastSpeakTime).inMilliseconds;
         final isNew = !result.isSimilarTo(_prev);
-        setState(() { _prev = _last; _last = result;
-          _status = isNew ? '✓ Scan #$_scanNo: ${result.objects.length} object(s)' : '↺ Same scene'; });
-        if (isNew || _successNo == 1) {
+
+        // Only speak every 2.5 seconds OR if the scene completely changed
+        if (timeSinceSpeak > 2500 || (isNew && timeSinceSpeak > 1000)) {
+          _prev = result;
+          _lastSpeakTime = DateTime.now();
           setState(() => _isSpeaking = true);
           await _tts.speak(result.spokenText);
           if (mounted) setState(() => _isSpeaking = false);
         }
-      } else {
-        setState(() { _last = null; _status = 'Nothing detected.'; });
       }
     } catch (e) {
       if (!mounted) return;
-      final msg = e.toString().toLowerCase();
-      if (msg.contains('quota') || msg.contains('exhausted')) {
-        setState(() => _status = 'Quota exceeded');
-        await _tts.speak('API quota reached. Try again later.'); _stopScan();
-      } else {
-        setState(() => _status = 'Retrying in 5s…');
-        await Future.delayed(const Duration(seconds: 5));
-      }
-    } finally { if (mounted) setState(() => _recognizing = false); }
+      setState(() => _status = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _recognizing = false);
+    }
   }
 
   @override

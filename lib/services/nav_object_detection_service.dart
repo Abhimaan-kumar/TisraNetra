@@ -1,10 +1,11 @@
 // lib/services/nav_object_detection_service.dart
 //
 // On-device object detection using SSD MobileNet v2 (COCO, quantised).
-// Provides bounding boxes with danger-level classification for navigation.
+// Provides bounding boxes with danger-level classification and depth
+// estimation for navigation.
 //
 // Input : CameraImage (YUV420)
-// Output: List<NavDetectedObject> with normalised bounding boxes + danger level
+// Output: List<NavDetectedObject> with normalised bboxes + danger + depth
 
 import 'dart:ui' show Rect;
 import 'package:camera/camera.dart';
@@ -12,6 +13,8 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
+
+import 'depth_estimation_service.dart';
 
 // ─── Danger level for navigation alerts ──────────────────────────────────────
 
@@ -38,6 +41,15 @@ class NavDetectedObject {
   /// Classified danger level for navigation alert priority
   final DangerLevel dangerLevel;
 
+  /// Estimated distance in metres (from depth estimation service)
+  final double estimatedDistance;
+
+  /// Proximity zone for urgency classification
+  final ProximityZone proximityZone;
+
+  /// Human-readable distance label (e.g. "~2 m")
+  final String distanceLabel;
+
   /// Horizontal centre of the bounding box (0.0 = left edge, 1.0 = right edge)
   double get centerX => boundingBox.left + boundingBox.width / 2;
 
@@ -52,12 +64,16 @@ class NavDetectedObject {
     required this.confidence,
     required this.boundingBox,
     required this.dangerLevel,
+    required this.estimatedDistance,
+    required this.proximityZone,
+    required this.distanceLabel,
   });
 
   @override
   String toString() =>
       'NavDetectedObject($label, ${(confidence * 100).toStringAsFixed(0)}%, '
-      'danger=$dangerLevel, cx=${centerX.toStringAsFixed(2)})';
+      'danger=$dangerLevel, dist=$distanceLabel, '
+      'cx=${centerX.toStringAsFixed(2)})';
 }
 
 // ─── Danger classification tables ────────────────────────────────────────────
@@ -89,6 +105,9 @@ class NavObjectDetectionService {
   Interpreter? _interpreter;
   List<String> _labels = [];
   bool _isInitialized = false;
+
+  /// Depth estimation engine (bounding-box heuristic)
+  final DepthEstimationService _depthService = DepthEstimationService();
 
   bool get isInitialized => _isInitialized;
 
@@ -127,7 +146,8 @@ class NavObjectDetectionService {
 
   // ── Detection pipeline ────────────────────────────────────────────────────
 
-  /// Run detection on a camera frame. Returns sorted by danger level then size.
+  /// Run detection on a camera frame. Returns sorted by danger level then
+  /// proximity (closer objects first).
   List<NavDetectedObject> detect(CameraImage cameraImage, int sensorOrientation) {
     if (!_isInitialized || _interpreter == null) return [];
 
@@ -175,7 +195,7 @@ class NavObjectDetectionService {
       // 6. Run inference
       _interpreter!.runForMultipleInputs([input], outputs);
 
-      // 7. Parse results
+      // 7. Parse results with depth estimation
       final numDetections = outputNumDet[0].toInt().clamp(0, numLocations);
       final detections = <NavDetectedObject>[];
 
@@ -197,21 +217,28 @@ class NavObjectDetectionService {
 
         if (right <= left || bottom <= top) continue;
 
+        final bbox = Rect.fromLTRB(left, top, right, bottom);
         final dangerLevel = _classifyDanger(label);
+
+        // Depth estimation from bounding box
+        final depth = _depthService.estimate(bbox, label);
 
         detections.add(NavDetectedObject(
           label: label,
           confidence: score,
-          boundingBox: Rect.fromLTRB(left, top, right, bottom),
+          boundingBox: bbox,
           dangerLevel: dangerLevel,
+          estimatedDistance: depth.distanceMeters,
+          proximityZone: depth.zone,
+          distanceLabel: depth.label,
         ));
       }
 
-      // Sort: critical first, then by area (closer objects first)
+      // Sort: critical first, then by proximity (closer = higher priority)
       detections.sort((a, b) {
         final dangerCmp = a.dangerLevel.index.compareTo(b.dangerLevel.index);
         if (dangerCmp != 0) return dangerCmp;
-        return b.areaFraction.compareTo(a.areaFraction); // larger = closer
+        return a.estimatedDistance.compareTo(b.estimatedDistance); // closer first
       });
 
       return detections;

@@ -1,10 +1,34 @@
 // lib/screens/currency_screen.dart
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import '../services/currency_service.dart';
 import '../services/tts_service.dart';
 import '../widgets/volume_button_mixin.dart';
+
+double _laplacianVariance(Uint8List jpegBytes) {
+  try {
+    final decoded = img.decodeImage(jpegBytes);
+    if (decoded == null) return 0;
+    final small = img.copyResize(decoded, width: 200);
+    final w = small.width; final h = small.height;
+    final gray = List.generate(h, (y) => List.generate(w, (x) {
+      final p = small.getPixel(x, y);
+      return (p.r * 0.299 + p.g * 0.587 + p.b * 0.114).toDouble();
+    }));
+    const kernel = [[0,1,0],[1,-4,1],[0,1,0]];
+    double sumSq = 0; int count = 0;
+    for (int y = 1; y < h-1; y++) for (int x = 1; x < w-1; x++) {
+      double v = 0;
+      for (int ky = 0; ky < 3; ky++) for (int kx = 0; kx < 3; kx++)
+        v += kernel[ky][kx] * gray[y+ky-1][x+kx-1];
+      sumSq += v*v; count++;
+    }
+    return count == 0 ? 0 : sumSq / count;
+  } catch (_) { return 0; }
+}
 
 class CurrencyScreen extends StatefulWidget {
   const CurrencyScreen({super.key});
@@ -129,20 +153,24 @@ class _CurrencyScreenState extends State<CurrencyScreen>
     }
   }
 
+  int _stableFrames = 0;
+  static const int _stableNeeded = 3;
+  static const double _sharpThresh = 110.0;
+  
   void _startScan() {
     if (_scanning) {
       _stopScan();
       return;
     }
+    _last = null;
+    _stableFrames = 0;
     setState(() {
       _scanning = true;
-      _status = 'Scanning… hold camera over currency';
+      _status = 'Point camera at currency…';
     });
-    _tts.speak('Scanning started. Hold camera over currency notes.');
-    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
-      if (_scanning && !_detecting) _capture();
-    });
-    _capture();
+    _tts.speak('Scanning started. Hold camera steady over currency.');
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => _checkFrame());
   }
 
   void _stopScan() {
@@ -153,25 +181,39 @@ class _CurrencyScreenState extends State<CurrencyScreen>
     });
   }
 
-  Future<void> _capture() async {
-    if (_detecting || _cam == null || !_camReady) return;
-    setState(() {
-      _detecting = true;
-      _status = 'Analyzing…';
-    });
+  Future<void> _checkFrame() async {
+    if (_detecting || _cam == null || !_camReady || !_scanning) return;
     try {
-      await _cam!.setFocusMode(FocusMode.auto);
-      await Future.delayed(const Duration(milliseconds: 600));
+      _detecting = true;
       final photo = await _cam!.takePicture();
       final bytes = await photo.readAsBytes();
-      if (bytes.length < 50000) {
-        setState(() {
-          _detecting = false;
-          _status = 'Image too small, retrying…';
-        });
-        return;
+      final sharp = await Future.microtask(() => _laplacianVariance(bytes));
+      
+      if (!mounted) return;
+      
+      if (sharp >= _sharpThresh) {
+        _stableFrames++;
+        setState(() => _status = 'Sharp — hold still ($_stableFrames/$_stableNeeded)');
+        if (_stableFrames >= _stableNeeded) {
+           _stopScan();
+           await _captureAndRead(photo.path);
+        }
+      } else {
+        _stableFrames = 0;
+        setState(() => _status = 'Move closer or hold steady');
       }
-      final result = await _svc.detectCurrency(bytes);
+    } catch (_) {} finally {
+      if (mounted) _detecting = false;
+    }
+  }
+
+  Future<void> _captureAndRead(String path) async {
+    setState(() {
+      _detecting = true;
+      _status = 'Analyzing currency…';
+    });
+    try {
+      final result = await _svc.detectCurrency(path);
       if (!mounted) return;
       if (result != null && result.detectedNotes.isNotEmpty) {
         setState(() {
@@ -179,17 +221,13 @@ class _CurrencyScreenState extends State<CurrencyScreen>
           _status = 'Detection complete!';
         });
         final notes = result.detectedNotes.map((n) => '₹$n').join(', ');
-        await _tts.speak(
-          'Detected ${result.detectedNotes.length} notes: $notes. '
-          'Total is ${result.totalAmount} rupees.',
-        );
+        await _tts.speak('Detected ${result.detectedNotes.length} notes: $notes. Total is ${result.totalAmount} rupees.');
       } else {
-        setState(() => _status = 'No notes found. Keep camera steady.');
-        await _tts.speak(
-          'Could not detect currency. Ensure notes are well lit.',
-        );
+        setState(() => _status = 'No notes found. Tap repeat to scan again.');
+        await _tts.speak('Could not detect currency. Ensure notes are well lit.');
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _status = 'Error: $e');
       await _tts.speak('An error occurred. Please try again.');
     } finally {

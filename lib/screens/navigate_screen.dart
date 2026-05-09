@@ -3,8 +3,10 @@
 // Smart Navigation Screen with two modes:
 //   ┌─────────────────────────────────────────────────┐
 //   │ Walk Mode     — Real-time obstacle detection +  │
-//   │                 directional guidance +           │
-//   │                 face recognition                 │
+//   │                 directional guidance +          │
+//   │                 depth estimation +              │
+//   │                 path boundary lines +           │
+//   │                 face recognition                │
 //   │ Destination   — Voice-activated turn-by-turn    │
 //   │   Mode          navigation with safety overlay  │
 //   └─────────────────────────────────────────────────┘
@@ -14,7 +16,6 @@
 
 import 'dart:async';
 import 'dart:typed_data';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -22,6 +23,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../services/nav_object_detection_service.dart';
+import '../services/depth_estimation_service.dart';
 import '../services/path_analyzer_service.dart';
 import '../services/navigation_service.dart';
 import '../services/face_embedding_service.dart';
@@ -47,6 +49,8 @@ const _kRed = Color(0xFFFF3D71);
 const _kSurface = Color(0xFF141929);
 const _kCard = Color(0xFF1C2137);
 const _kCardBorder = Color(0xFF2A3050);
+const _kCyan = Color(0xFF00E5FF);
+const _kOrange = Color(0xFFFF9100);
 
 enum _NavMode { modeSelect, walkMode, destinationMode }
 
@@ -96,6 +100,12 @@ class _NavigateScreenState extends State<NavigateScreen>
   String _destStatus = 'Say your destination';
   String _currentInstruction = '';
   bool _navActive = false;
+  NavigationSnapshot? _navSnapshot;
+  bool _isRerouting = false;
+  bool _isApproachingTurn = false;
+
+  // ── Safety vs Route priority ──────────────────────────────────────────────
+  DateTime _lastSafetySpeak = DateTime(2000);
 
   // ── Init state ────────────────────────────────────────────────────────────
   bool _initialized = false;
@@ -160,24 +170,52 @@ class _NavigateScreenState extends State<NavigateScreen>
       // Navigation service callbacks
       _navService.onInstruction = (en, hi) {
         if (!mounted) return;
-        setState(() => _currentInstruction = en);
-        _tts.speak(en);
+        setState(() {
+          _currentInstruction = en;
+        });
+        // Only speak route instructions if no critical safety alert active
+        final safetyRecent = DateTime.now().difference(_lastSafetySpeak).inSeconds < 3;
+        if (!safetyRecent) {
+          _tts.speak(en);
+        }
       };
       _navService.onArrived = () {
         if (!mounted) return;
         setState(() {
           _destStatus = 'You have arrived!';
           _navActive = false;
+          _walkActive = false;
+          _navSnapshot = null;
         });
-        _tts.speak('You have arrived at your destination.');
+        _tts.speak('You have arrived at your destination. Well done!');
       };
       _navService.onStateChange = (state) {
         if (!mounted) return;
         setState(() {
           if (state == NavigationState.error) {
             _destStatus = 'Navigation error. Try again.';
+          } else if (state == NavigationState.rerouting) {
+            _isRerouting = true;
+            _destStatus = 'Recalculating route...';
+          } else if (state == NavigationState.navigating && _isRerouting) {
+            _isRerouting = false;
+            _destStatus = 'Route updated.';
           }
         });
+      };
+      _navService.onNavigationUpdate = (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _navSnapshot = snapshot;
+          _isApproachingTurn = snapshot.isApproachingTurn;
+          if (_navActive) {
+            _destStatus = '${_navService.remainingDistanceText} · ETA ${snapshot.eta}';
+          }
+        });
+      };
+      _navService.onReroute = (message) {
+        if (!mounted) return;
+        _tts.speak(message);
       };
 
       if (!mounted) return;
@@ -252,7 +290,7 @@ class _NavigateScreenState extends State<NavigateScreen>
 
   Future<void> _processFrame(CameraImage image) async {
     try {
-      // 1. Object detection
+      // 1. Object detection (with integrated depth estimation)
       final detections =
           _detectionService.detect(image, _sensorOrientation);
 
@@ -263,7 +301,7 @@ class _NavigateScreenState extends State<NavigateScreen>
          structuralBlocker = await _sceneLabeler.detectStructuralBlockage(inputImage);
       }
 
-      // 3. Path analysis
+      // 3. Path analysis (with boundary lines + urgency)
       final analysis = _pathAnalyzer.analyze(detections, structuralBlocker: structuralBlocker);
 
       // 4. Face recognition (if person detected)
@@ -282,10 +320,22 @@ class _NavigateScreenState extends State<NavigateScreen>
         }
       });
 
-      // 4. Speak guidance based on priority
+      // 5. Speak guidance — safety alerts take priority over route instructions
       if (_walkActive || _navActive) {
         if (_pathAnalyzer.shouldSpeak(analysis)) {
-          await _tts.speak(analysis.guidance);
+          // In destination mode: safety alerts override route guidance
+          if (_mode == _NavMode.destinationMode && _navActive) {
+            // Only speak safety if critical/high urgency
+            if (analysis.urgency == VoiceUrgency.critical ||
+                analysis.urgency == VoiceUrgency.high) {
+              _lastSafetySpeak = DateTime.now();
+              await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+            }
+            // Medium/low urgency: don't interrupt route instructions
+          } else {
+            // Walk mode: always speak
+            await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+          }
         }
         // Announce identified face
         if (faceName != null) {
@@ -456,6 +506,8 @@ class _NavigateScreenState extends State<NavigateScreen>
   void _exitToModeSelect() {
     _walkActive = false;
     _navActive = false;
+    _isRerouting = false;
+    _navSnapshot = null;
     _navService.stopNavigation();
     _stopCamera();
     setState(() {
@@ -492,11 +544,17 @@ class _NavigateScreenState extends State<NavigateScreen>
         break;
       case _NavMode.destinationMode:
         if (_navActive) {
-          // Repeat current instruction
+          // Repeat current instruction + remaining info
           if (_currentInstruction.isNotEmpty) {
             await _tts.speak(_currentInstruction);
           }
-          await _tts.speak(_navService.getRemainingInfo());
+          final remaining = _navService.getRemainingInfo();
+          await _tts.speak(remaining);
+          // Also announce obstacles if any
+          if (_detections.isNotEmpty) {
+            final names = _detections.take(3).map((d) => d.label).toSet().join(', ');
+            await _tts.speak('Nearby obstacles: $names.');
+          }
         } else {
           await _tts.speak('Say where you want to go.');
         }
@@ -559,8 +617,16 @@ class _NavigateScreenState extends State<NavigateScreen>
                 .speak(hi ? 'कुछ नहीं दिख रहा।' : 'Nothing detected ahead.');
           } else {
             final names =
-                _detections.take(5).map((d) => d.label).toSet().join(', ');
+                _detections.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
             await _tts.speak(hi ? 'सामने: $names।' : 'Ahead: $names.');
+          }
+        } else if (c.contains('how far') || c.contains('distance') || c.contains('kitna door')) {
+          if (_pathAnalysis?.closestDistanceLabel != null) {
+            await _tts.speak(hi
+                ? 'सबसे करीब ${_pathAnalysis!.closestDistanceLabel}।'
+                : 'Closest obstacle at ${_pathAnalysis!.closestDistanceLabel}.');
+          } else {
+            await _tts.speak(hi ? 'कोई बाधा नहीं।' : 'No obstacles detected.');
           }
         } else if (c.contains('who') || c.contains('kaun')) {
           if (_lastFaceName.isNotEmpty) {
@@ -573,8 +639,8 @@ class _NavigateScreenState extends State<NavigateScreen>
           }
         } else {
           await _tts.speak(hi
-              ? 'बोलें: "stop", "what is ahead", या "back"।'
-              : 'Say stop, what is ahead, who is that, or back.');
+              ? 'बोलें: "stop", "what is ahead", "how far", या "back"।'
+              : 'Say stop, what is ahead, how far, who is that, or back.');
         }
         break;
 
@@ -586,6 +652,8 @@ class _NavigateScreenState extends State<NavigateScreen>
           _navService.stopNavigation();
           setState(() {
             _navActive = false;
+            _walkActive = false;
+            _navSnapshot = null;
             _destStatus = 'Navigation cancelled.';
             _currentInstruction = '';
           });
@@ -593,7 +661,9 @@ class _NavigateScreenState extends State<NavigateScreen>
               .speak(hi ? 'नेविगेशन रद्द।' : 'Navigation cancelled.');
         } else if (c.contains('how far') ||
             c.contains('kitna door') ||
-            c.contains('remaining')) {
+            c.contains('remaining') ||
+            c.contains('eta') ||
+            c.contains('time')) {
           await _tts.speak(_navService.getRemainingInfo());
         } else if (c.contains('repeat') ||
             c.contains('again') ||
@@ -601,21 +671,38 @@ class _NavigateScreenState extends State<NavigateScreen>
           if (_currentInstruction.isNotEmpty) {
             await _tts.speak(_currentInstruction);
           }
+        } else if (c.contains('what') ||
+            c.contains('ahead') ||
+            c.contains('obstacle') ||
+            c.contains('samne')) {
+          // Report obstacles while navigating
+          if (_detections.isEmpty) {
+            await _tts.speak(hi ? 'रास्ता साफ है।' : 'Path is clear.');
+          } else {
+            final names = _detections.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
+            await _tts.speak(hi ? 'सामने: $names।' : 'Ahead: $names.');
+          }
         } else if (!_navActive) {
           // Treat the entire command as a destination name
           await _startDestinationNavigation(cmd);
         } else {
           await _tts.speak(hi
-              ? 'बोलें: "stop", "how far", या "repeat"।'
-              : 'Say stop, how far, or repeat instruction.');
+              ? 'बोलें: "stop", "how far", "what is ahead", या "repeat"।'
+              : 'Say stop, how far, what is ahead, or repeat instruction.');
         }
         break;
     }
   }
 
-  Future<void> _startDestinationNavigation(String destination) async {
+  Future<void> _startDestinationNavigation(String command) async {
+    // Clean up destination by removing common STT conversational prefixes
+    String destination = command.toLowerCase()
+        .replaceAll(RegExp(r'^(take me to|navigate to|go to|directions to|i want to go to|mujhe jana hai|rasta batao)\s+', caseSensitive: false), '')
+        .trim();
+
     setState(() {
       _destStatus = 'Finding route to: $destination...';
+      _navSnapshot = null;
     });
     await _tts.speak('Finding route to $destination. Please wait.');
 
@@ -623,23 +710,30 @@ class _NavigateScreenState extends State<NavigateScreen>
     if (!mounted) return;
 
     if (route == null) {
-      setState(() => _destStatus = 'Could not find route. Try again.');
-      await _tts.speak(
-        'Sorry, I could not find a route to $destination. '
-        'Press volume up and say the destination again.',
-      );
+      if (_navService.lastPosition == null) {
+        setState(() => _destStatus = 'Could not get location.');
+        await _tts.speak('Sorry, I could not get your current location. Make sure location services are enabled.');
+      } else {
+        setState(() => _destStatus = 'Could not find route. Try again.');
+        await _tts.speak(
+          'Sorry, I could not find a walking route to $destination. '
+          'Press volume up and say the destination again.',
+        );
+      }
       return;
     }
 
     setState(() {
       _destStatus =
-          'Route: ${route.totalDistance}, ${route.totalDuration}';
+          '${route.totalDistance} · ETA ${route.totalDuration}';
       _navActive = true;
     });
 
     await _tts.speak(
-      'Route found. ${route.totalDistance}, ${route.totalDuration}. '
-      '${route.steps.length} steps. Starting navigation.',
+      'Route found to ${route.destinationAddress}. '
+      '${route.totalDistance}, estimated ${route.totalDuration}. '
+      '${route.steps.length} steps. '
+      'Starting navigation. I will also watch for obstacles.',
     );
 
     _walkActive = true; // Enable obstacle detection during navigation
@@ -849,7 +943,8 @@ class _NavigateScreenState extends State<NavigateScreen>
                 titleHi: 'वॉक मोड',
                 description:
                     'Real-time obstacle detection with directional guidance. '
-                    'AI detects objects, identifies people, and guides you safely.',
+                    'AI detects objects, estimates distance, identifies people, '
+                    'and guides you safely with urgency-aware voice.',
                 color: _kGreen,
                 gradientColors: const [Color(0xFF00E676), Color(0xFF00B248)],
                 onTap: _enterWalkMode,
@@ -981,13 +1076,13 @@ class _NavigateScreenState extends State<NavigateScreen>
   Widget _buildWalkModeView() {
     return Column(
       children: [
-        // Camera + detection overlay
+        // Camera + detection overlay + path boundary lines
         Expanded(flex: 5, child: _buildCameraPreview()),
         // Zone indicator
         _buildZoneIndicator(),
-        // Status / guidance
+        // Status / guidance with distance info
         _buildGuidancePanel(),
-        // Detected objects chips
+        // Detected objects chips with distance
         if (_detections.isNotEmpty) _buildDetectionChips(),
         // Controls
         _buildWalkControls(),
@@ -1011,16 +1106,17 @@ class _NavigateScreenState extends State<NavigateScreen>
         // Camera preview
         CameraPreview(_cam!),
 
-        // Bounding box overlay
-        if (_detections.isNotEmpty)
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _NavBBoxPainter(
-                objects: _detections,
-                faceName: _lastFaceName,
-              ),
+        // Path boundary lines + bounding boxes + distance labels overlay
+        Positioned.fill(
+          child: CustomPaint(
+            painter: _NavOverlayPainter(
+              objects: _detections,
+              faceName: _lastFaceName,
+              pathBoundary: _pathAnalysis?.pathBoundary,
+              urgency: _pathAnalysis?.urgency ?? VoiceUrgency.low,
             ),
           ),
+        ),
 
         // Walk active indicator
         if (_walkActive)
@@ -1057,6 +1153,41 @@ class _NavigateScreenState extends State<NavigateScreen>
             ),
           ),
 
+        // Closest distance badge
+        if (_pathAnalysis?.closestDistanceLabel != null)
+          Positioned(
+            top: 8,
+            left: 60,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _urgencyColor(_pathAnalysis?.urgency ?? VoiceUrgency.low)
+                      .withOpacity(0.6),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.straighten,
+                      color: _urgencyColor(_pathAnalysis?.urgency ?? VoiceUrgency.low),
+                      size: 12),
+                  const SizedBox(width: 4),
+                  Text(
+                    _pathAnalysis!.closestDistanceLabel!,
+                    style: GoogleFonts.inter(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
         // Listening indicator
         if (isMixinListening)
           Positioned(
@@ -1082,6 +1213,19 @@ class _NavigateScreenState extends State<NavigateScreen>
           ),
       ],
     );
+  }
+
+  Color _urgencyColor(VoiceUrgency urgency) {
+    switch (urgency) {
+      case VoiceUrgency.critical:
+        return _kRed;
+      case VoiceUrgency.high:
+        return _kOrange;
+      case VoiceUrgency.medium:
+        return _kYellow;
+      case VoiceUrgency.low:
+        return _kGreen;
+    }
   }
 
   Widget _buildZoneIndicator() {
@@ -1149,13 +1293,26 @@ class _NavigateScreenState extends State<NavigateScreen>
           Icon(guidanceIcon, color: guidanceColor, size: 24),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              _walkStatus,
-              style: GoogleFonts.inter(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _walkStatus,
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (analysis?.closestDistanceLabel != null)
+                  Text(
+                    'Nearest: ${analysis!.closestDistanceLabel}',
+                    style: GoogleFonts.inter(
+                      color: guidanceColor.withOpacity(0.8),
+                      fontSize: 11,
+                    ),
+                  ),
+              ],
             ),
           ),
           if (_detections.isNotEmpty)
@@ -1212,10 +1369,10 @@ class _NavigateScreenState extends State<NavigateScreen>
             ),
             child: Center(
               child: Text(
-                det.label,
+                '${det.label} ${det.distanceLabel}',
                 style: GoogleFonts.inter(
                   color: chipColor,
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1301,15 +1458,56 @@ class _NavigateScreenState extends State<NavigateScreen>
       children: [
         // Camera + safety overlay (same as walk mode)
         Expanded(flex: 4, child: _buildCameraPreview()),
-        // Zone indicator
-        if (_navActive) _buildZoneIndicator(),
+        // Zone indicator with approach highlight
+        if (_navActive) _buildDestZoneIndicator(),
         // Navigation instruction panel
         _buildNavigationPanel(),
+        // ETA / Distance / Progress bar
+        if (_navActive && _navSnapshot != null) _buildNavProgressBar(),
         // Destination status
         _buildDestStatusBar(),
+        // Detected objects chips with distance (when navigating)
+        if (_navActive && _detections.isNotEmpty) _buildDetectionChips(),
         // Controls
         _buildDestControls(),
       ],
+    );
+  }
+
+  Widget _buildDestZoneIndicator() {
+    final left = _pathAnalysis?.leftBlocked ?? false;
+    final center = _pathAnalysis?.centerBlocked ?? false;
+    final right = _pathAnalysis?.rightBlocked ?? false;
+
+    return SizedBox(
+      height: 8,
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              color: left ? _kRed : _kGreen,
+            ),
+          ),
+          Container(width: 2, color: Colors.black),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: center ? _kRed : _kGreen,
+                // Pulsing border when approaching a turn
+                border: _isApproachingTurn
+                    ? Border.all(color: _kOrange, width: 2)
+                    : null,
+              ),
+            ),
+          ),
+          Container(width: 2, color: Colors.black),
+          Expanded(
+            child: Container(
+              color: right ? _kRed : _kGreen,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1342,27 +1540,52 @@ class _NavigateScreenState extends State<NavigateScreen>
       );
     }
 
+    // Determine icon based on next maneuver
+    IconData maneuverIcon = Icons.navigation_rounded;
+    Color panelAccent = _kIndigo;
+    if (_isRerouting) {
+      maneuverIcon = Icons.refresh_rounded;
+      panelAccent = _kOrange;
+    } else if (_navService.nextStep?.maneuver != null) {
+      final m = _navService.nextStep!.maneuver!;
+      if (m.contains('left')) {
+        maneuverIcon = Icons.turn_left_rounded;
+      } else if (m.contains('right')) {
+        maneuverIcon = Icons.turn_right_rounded;
+      } else if (m.contains('uturn')) {
+        maneuverIcon = Icons.u_turn_left_rounded;
+      } else if (m.contains('straight')) {
+        maneuverIcon = Icons.straight_rounded;
+      } else if (m.contains('roundabout')) {
+        maneuverIcon = Icons.roundabout_left_rounded;
+      }
+    }
+
+    // Approaching turn: change panel accent
+    if (_isApproachingTurn) {
+      panelAccent = _kOrange;
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: _kIndigo.withOpacity(0.12),
+        color: panelAccent.withOpacity(0.12),
         border: Border(
-          top: BorderSide(color: _kIndigo.withOpacity(0.4)),
-          bottom: BorderSide(color: _kIndigo.withOpacity(0.4)),
+          top: BorderSide(color: panelAccent.withOpacity(0.4)),
+          bottom: BorderSide(color: panelAccent.withOpacity(0.4)),
         ),
       ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: _kIndigo,
+              color: panelAccent,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.navigation_rounded,
-                color: Colors.white, size: 22),
+            child: Icon(maneuverIcon, color: Colors.white, size: 24),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1370,23 +1593,162 @@ class _NavigateScreenState extends State<NavigateScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _currentInstruction,
+                  _isRerouting ? 'Recalculating route...' : _currentInstruction,
                   style: GoogleFonts.inter(
                     color: Colors.white,
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  _navService.progressText,
-                  style: GoogleFonts.inter(
-                    color: _kIndigoLight,
-                    fontSize: 11,
-                  ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    Text(
+                      _navService.progressText,
+                      style: GoogleFonts.inter(
+                        color: _kIndigoLight,
+                        fontSize: 11,
+                      ),
+                    ),
+                    if (_navSnapshot != null) ...[
+                      const SizedBox(width: 8),
+                      Icon(Icons.straighten, color: _kIndigoLight, size: 11),
+                      const SizedBox(width: 3),
+                      Text(
+                        _navService.remainingDistanceText,
+                        style: GoogleFonts.inter(
+                          color: _kIndigoLight,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
+          ),
+          // ETA badge
+          if (_navSnapshot != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _kGreen.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kGreen.withOpacity(0.3)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    _navSnapshot!.eta,
+                    style: GoogleFonts.inter(
+                      color: _kGreen,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    'ETA',
+                    style: GoogleFonts.inter(
+                      color: _kGreen.withOpacity(0.7),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavProgressBar() {
+    final snapshot = _navSnapshot!;
+    final totalSteps = snapshot.totalSteps;
+    final currentIdx = snapshot.currentStepIndex;
+    final progress = totalSteps > 0 ? (currentIdx / totalSteps) : 0.0;
+
+    // Next turn distance
+    final nextTurnDist = snapshot.distanceToNextTurn;
+    String nextTurnText;
+    if (nextTurnDist < 15) {
+      nextTurnText = 'Now';
+    } else if (nextTurnDist < 100) {
+      nextTurnText = '${nextTurnDist.round()} m';
+    } else {
+      nextTurnText = '${(nextTurnDist / 1000).toStringAsFixed(1)} km';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: _kCard,
+      child: Column(
+        children: [
+          // Progress bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 4,
+              backgroundColor: _kCardBorder,
+              valueColor: AlwaysStoppedAnimation(
+                _isApproachingTurn ? _kOrange : _kIndigo,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Next turn distance
+              Row(
+                children: [
+                  Icon(
+                    _isApproachingTurn
+                        ? Icons.warning_amber_rounded
+                        : Icons.swap_calls_rounded,
+                    color: _isApproachingTurn ? _kOrange : Colors.white54,
+                    size: 14,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Next turn: $nextTurnText',
+                    style: GoogleFonts.inter(
+                      color: _isApproachingTurn ? _kOrange : Colors.white54,
+                      fontSize: 11,
+                      fontWeight: _isApproachingTurn
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+              // Step counter
+              Text(
+                '${currentIdx + 1} / $totalSteps',
+                style: GoogleFonts.inter(
+                  color: Colors.white38,
+                  fontSize: 11,
+                ),
+              ),
+              // Remaining distance
+              Row(
+                children: [
+                  const Icon(Icons.flag_outlined,
+                      color: Colors.white54, size: 13),
+                  const SizedBox(width: 3),
+                  Text(
+                    _navService.remainingDistanceText,
+                    style: GoogleFonts.inter(
+                      color: Colors.white54,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ],
       ),
@@ -1398,12 +1760,44 @@ class _NavigateScreenState extends State<NavigateScreen>
       width: double.infinity,
       color: _kSurface,
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14),
-      child: Text(
-        _destStatus,
-        style: GoogleFonts.inter(
-          color: _navActive ? _kGreen : Colors.white60,
-          fontSize: 12,
-        ),
+      child: Row(
+        children: [
+          if (_isRerouting)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: _kOrange,
+                ),
+              ),
+            ),
+          Expanded(
+            child: Text(
+              _destStatus,
+              style: GoogleFonts.inter(
+                color: _isRerouting
+                    ? _kOrange
+                    : _navActive
+                        ? _kGreen
+                        : Colors.white60,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          if (_navActive && _navService.currentRoute != null)
+            Text(
+              _navService.currentRoute!.destinationAddress.length > 25
+                  ? '${_navService.currentRoute!.destinationAddress.substring(0, 25)}…'
+                  : _navService.currentRoute!.destinationAddress,
+              style: GoogleFonts.inter(
+                color: Colors.white30,
+                fontSize: 10,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1423,6 +1817,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                   setState(() {
                     _navActive = false;
                     _walkActive = false;
+                    _navSnapshot = null;
                     _destStatus = 'Navigation stopped.';
                     _currentInstruction = '';
                   });
@@ -1442,7 +1837,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                 ),
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: () {
@@ -1450,9 +1845,9 @@ class _NavigateScreenState extends State<NavigateScreen>
                     _tts.speak(_currentInstruction);
                   }
                 },
-                icon: const Icon(Icons.replay, size: 20),
+                icon: const Icon(Icons.replay, size: 18),
                 label: Text('Repeat',
-                    style: GoogleFonts.inter(fontSize: 13)),
+                    style: GoogleFonts.inter(fontSize: 12)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _kCard,
                   foregroundColor: Colors.white,
@@ -1461,6 +1856,26 @@ class _NavigateScreenState extends State<NavigateScreen>
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // ETA / info button
+            SizedBox(
+              width: 48,
+              height: 48,
+              child: ElevatedButton(
+                onPressed: () {
+                  _tts.speak(_navService.getRemainingInfo());
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kCard,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: const Icon(Icons.schedule_rounded, size: 22),
               ),
             ),
           ] else ...[
@@ -1489,17 +1904,31 @@ class _NavigateScreenState extends State<NavigateScreen>
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  Bounding Box Painter for Navigation
+//  Enhanced Overlay Painter — Bounding Boxes + Path Boundary Lines + Distance
 // ═════════════════════════════════════════════════════════════════════════════
 
-class _NavBBoxPainter extends CustomPainter {
+class _NavOverlayPainter extends CustomPainter {
   final List<NavDetectedObject> objects;
   final String? faceName;
+  final PathBoundary? pathBoundary;
+  final VoiceUrgency urgency;
 
-  const _NavBBoxPainter({required this.objects, this.faceName});
+  const _NavOverlayPainter({
+    required this.objects,
+    this.faceName,
+    this.pathBoundary,
+    required this.urgency,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // ── 1. Draw path boundary lines ─────────────────────────────────────────
+    _drawPathBoundaryLines(canvas, size);
+
+    // ── 2. Draw zone dividers (faint) ───────────────────────────────────────
+    _drawZoneDividers(canvas, size);
+
+    // ── 3. Draw bounding boxes with distance labels ─────────────────────────
     for (int i = 0; i < objects.length; i++) {
       final obj = objects[i];
 
@@ -1524,31 +1953,42 @@ class _NavBBoxPainter extends CustomPainter {
         obj.boundingBox.bottom * size.height,
       );
 
+      // Draw semi-transparent fill for close objects
+      if (obj.proximityZone == ProximityZone.veryClose ||
+          obj.proximityZone == ProximityZone.close) {
+        canvas.drawRect(
+          rect,
+          Paint()
+            ..color = color.withOpacity(0.08)
+            ..style = PaintingStyle.fill,
+        );
+      }
+
       // Draw box
       canvas.drawRect(
         rect,
         Paint()
           ..color = color
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5,
+          ..strokeWidth = obj.proximityZone == ProximityZone.veryClose ? 3.5 : 2.5,
       );
 
       // Draw corners
       _drawCorners(canvas, rect, color);
 
-      // Label
+      // Label with distance
       String label = obj.label;
       if (obj.label == 'person' && faceName != null && faceName!.isNotEmpty) {
         label = faceName!;
       }
-      label = '  $label (${(obj.confidence * 100).toStringAsFixed(0)}%)  ';
+      label = '  $label ${obj.distanceLabel} (${(obj.confidence * 100).toStringAsFixed(0)}%)  ';
 
       final tp = TextPainter(
         text: TextSpan(
           text: label,
           style: TextStyle(
             color: Colors.black,
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
             background: Paint()..color = color,
           ),
@@ -1563,7 +2003,184 @@ class _NavBBoxPainter extends CustomPainter {
           rect.top > tp.height + 4 ? rect.top - tp.height - 4 : rect.top + 4,
         ),
       );
+
+      // Draw distance indicator bar at bottom of bbox
+      _drawDistanceBar(canvas, rect, obj, color);
     }
+  }
+
+  void _drawPathBoundaryLines(Canvas canvas, Size size) {
+    if (pathBoundary == null) return;
+
+    final leftX = pathBoundary!.leftLineX * size.width;
+    final rightX = pathBoundary!.rightLineX * size.width;
+
+    // Determine colour based on corridor width
+    final corridorFraction = pathBoundary!.corridorWidth;
+    final Color lineColor;
+    if (corridorFraction > 0.40) {
+      lineColor = _kCyan; // Wide safe corridor
+    } else if (corridorFraction > 0.20) {
+      lineColor = _kYellow; // Narrowing
+    } else {
+      lineColor = _kRed; // Very narrow / blocked
+    }
+
+    // Left boundary line
+    final leftPaint = Paint()
+      ..color = lineColor.withOpacity(0.7)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+
+    // Draw dashed lines for path boundaries
+    _drawDashedLine(
+      canvas,
+      Offset(leftX, size.height * 0.15),
+      Offset(leftX, size.height * 0.95),
+      leftPaint,
+    );
+
+    // Right boundary line
+    _drawDashedLine(
+      canvas,
+      Offset(rightX, size.height * 0.15),
+      Offset(rightX, size.height * 0.95),
+      leftPaint,
+    );
+
+    // Draw semi-transparent corridor fill
+    canvas.drawRect(
+      Rect.fromLTRB(leftX, size.height * 0.15, rightX, size.height * 0.95),
+      Paint()
+        ..color = lineColor.withOpacity(0.04)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Draw "SAFE PATH" label at top of corridor
+    if (corridorFraction > 0.15) {
+      final safePaint = TextPainter(
+        text: TextSpan(
+          text: ' SAFE PATH ',
+          style: TextStyle(
+            color: lineColor,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+            background: Paint()..color = Colors.black.withOpacity(0.5),
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      safePaint.paint(
+        canvas,
+        Offset(
+          (leftX + rightX) / 2 - safePaint.width / 2,
+          size.height * 0.12,
+        ),
+      );
+    }
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset p1, Offset p2, Paint paint) {
+    const dashLength = 10.0;
+    const gapLength = 6.0;
+    final dx = p2.dx - p1.dx;
+    final dy = p2.dy - p1.dy;
+    final totalLength = (dx * dx + dy * dy);
+    if (totalLength == 0) return;
+    final sqrtLen = _sqrt(totalLength);
+    final unitDx = dx / sqrtLen;
+    final unitDy = dy / sqrtLen;
+
+    double drawn = 0.0;
+    bool isDash = true;
+    while (drawn < sqrtLen) {
+      final segLength = isDash
+          ? dashLength.clamp(0, sqrtLen - drawn)
+          : gapLength.clamp(0, sqrtLen - drawn);
+      if (isDash) {
+        canvas.drawLine(
+          Offset(p1.dx + unitDx * drawn, p1.dy + unitDy * drawn),
+          Offset(
+            p1.dx + unitDx * (drawn + segLength),
+            p1.dy + unitDy * (drawn + segLength),
+          ),
+          paint,
+        );
+      }
+      drawn += segLength;
+      isDash = !isDash;
+    }
+  }
+
+  double _sqrt(double x) {
+    if (x <= 0) return 0;
+    double guess = x / 2;
+    for (int i = 0; i < 20; i++) {
+      guess = (guess + x / guess) / 2;
+    }
+    return guess;
+  }
+
+  void _drawZoneDividers(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.08)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    // Left/centre boundary (33%)
+    canvas.drawLine(
+      Offset(size.width * 0.33, 0),
+      Offset(size.width * 0.33, size.height),
+      paint,
+    );
+    // Centre/right boundary (66%)
+    canvas.drawLine(
+      Offset(size.width * 0.66, 0),
+      Offset(size.width * 0.66, size.height),
+      paint,
+    );
+  }
+
+  void _drawDistanceBar(
+      Canvas canvas, Rect rect, NavDetectedObject obj, Color color) {
+    // Small coloured bar at bottom of bbox showing proximity
+    final barHeight = 3.0;
+    final barWidth = rect.width;
+
+    // Fill fraction based on proximity (closer = more filled)
+    double fillFraction;
+    switch (obj.proximityZone) {
+      case ProximityZone.veryClose:
+        fillFraction = 1.0;
+        break;
+      case ProximityZone.close:
+        fillFraction = 0.7;
+        break;
+      case ProximityZone.near:
+        fillFraction = 0.4;
+        break;
+      case ProximityZone.far:
+        fillFraction = 0.15;
+        break;
+    }
+
+    // Background
+    canvas.drawRect(
+      Rect.fromLTWH(rect.left, rect.bottom + 2, barWidth, barHeight),
+      Paint()
+        ..color = Colors.white.withOpacity(0.15)
+        ..style = PaintingStyle.fill,
+    );
+    // Fill
+    canvas.drawRect(
+      Rect.fromLTWH(rect.left, rect.bottom + 2, barWidth * fillFraction, barHeight),
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
   }
 
   void _drawCorners(Canvas canvas, Rect r, Color c) {
@@ -1584,6 +2201,9 @@ class _NavBBoxPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_NavBBoxPainter old) =>
-      old.objects != objects || old.faceName != faceName;
+  bool shouldRepaint(_NavOverlayPainter old) =>
+      old.objects != objects ||
+      old.faceName != faceName ||
+      old.pathBoundary != pathBoundary ||
+      old.urgency != urgency;
 }

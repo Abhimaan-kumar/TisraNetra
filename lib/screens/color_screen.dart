@@ -101,23 +101,17 @@ class _ColorScreenState extends State<ColorScreen>
   Future<void> _initCamera() async {
     try {
       _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        setState(() => _status = 'No camera');
-        return;
-      }
+      if (_cameras.isEmpty) { setState(() => _status = 'No camera'); return; }
       final ctrl = CameraController(
         _cameras.first,
         ResolutionPreset.medium,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: ImageFormatGroup.yuv420,
       );
       await ctrl.initialize();
       await ctrl.setFocusMode(FocusMode.auto);
       if (!mounted) return;
-      setState(() {
-        _cam = ctrl;
-        _camReady = true;
-      });
+      setState(() { _cam = ctrl; _camReady = true; });
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) _startScan();
     } catch (e) {
@@ -128,67 +122,52 @@ class _ColorScreenState extends State<ColorScreen>
   void _startScan() {
     if (_scanning) return;
     _keepScanning = true;
-    setState(() {
-      _scanning = true;
-      _status = 'Scanning for color…';
-    });
-    _loop();
+    setState(() { _scanning = true; _status = 'Scanning for color…'; });
+    if (!mounted || !_camReady || _cam == null) return;
+    _cam!.startImageStream((image) => _processFrame(image));
   }
 
   void _stopScan() {
     _keepScanning = false;
-    setState(() {
-      _scanning = false;
-      _status = 'Paused.';
-    });
-  }
-
-  Future<void> _loop() async {
-    while (_keepScanning && mounted) {
-      await _detect();
-      if (_keepScanning && mounted)
-        await Future.delayed(const Duration(seconds: 2));
+    setState(() { _scanning = false; _status = 'Paused.'; });
+    if (_cam?.value.isStreamingImages ?? false) {
+      _cam!.stopImageStream();
     }
   }
 
-  Future<void> _detect() async {
-    if (_identifying || !_camReady || _cam == null) return;
-    _scanNo++;
-    setState(() {
-      _identifying = true;
-      _status = 'Scan #$_scanNo…';
-    });
+  DateTime _lastProcessTime = DateTime.now();
+  DateTime _lastSpeakTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> _processFrame(CameraImage image) async {
+    if (_identifying || !_scanning || !mounted) return;
+    if (DateTime.now().difference(_lastProcessTime).inMilliseconds < 200) return; // 5 FPS
+    
+    _identifying = true;
+    _lastProcessTime = DateTime.now();
+    
     try {
-      final photo = await _cam!.takePicture();
-      final bytes = await photo.readAsBytes();
-      final result = await _svc.identifyColor(bytes);
+      final result = await _svc.identifyColor(image);
       if (!mounted) return;
+      
       if (result != null) {
-        final same =
-            _prev != null && _prev!.dominantColor == result.dominantColor;
-        if (same) {
-          setState(() => _last = result);
-          return;
-        }
         setState(() {
-          _prev = _last;
           _last = result;
           _status = 'Color: ${result.description}';
         });
-        setState(() => _isSpeaking = true);
-        await _tts.speak(result.description);
-        if (mounted) setState(() => _isSpeaking = false);
-      } else {
-        setState(() => _status = 'Could not detect color.');
+
+        final timeSinceSpeak = DateTime.now().difference(_lastSpeakTime).inMilliseconds;
+        final isNew = _prev == null || _prev!.dominantColor != result.dominantColor;
+
+        if (timeSinceSpeak > 3000 || (isNew && timeSinceSpeak > 1500)) {
+          _prev = result;
+          _lastSpeakTime = DateTime.now();
+          setState(() => _isSpeaking = true);
+          await _tts.speak(result.description);
+          if (mounted) setState(() => _isSpeaking = false);
+        }
       }
     } catch (e) {
-      final msg = e.toString().toLowerCase();
-      if (msg.contains('quota') || msg.contains('429')) {
-        setState(() => _status = 'Quota exceeded.');
-        _stopScan();
-      } else {
-        setState(() => _status = 'Error: $e');
-      }
+      if (mounted) setState(() => _status = 'Error: $e');
     } finally {
       if (mounted) setState(() => _identifying = false);
     }
