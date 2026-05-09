@@ -8,6 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_phone_direct_caller/flutter_phone_direct_caller.dart';
+import '../services/language_preference_service.dart';
 import '../widgets/volume_button_mixin.dart';
 
 class EmergencyScreen extends StatefulWidget {
@@ -47,10 +48,17 @@ class _EmergencyScreenState extends State<EmergencyScreen>
   }
 
   Future<void> _initTts() async {
-    await _flutterTts.setLanguage('en-US');
+    final lang = LanguagePreferenceService().preferredLanguage;
+    await _flutterTts.setLanguage(lang);
     await _flutterTts.setSpeechRate(0.45);
     await _flutterTts.setVolume(1.0);
     await _flutterTts.setPitch(1.0);
+  }
+
+  bool get _isHindi => LanguagePreferenceService().isHindi;
+
+  Future<void> _speakL(String en, String hi) async {
+    await _flutterTts.speak(_isHindi ? hi : en);
   }
 
   Future<void> _requestPermissions() async {
@@ -76,7 +84,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
       await _callGuardian();
     } else {
       setState(() => _statusText = 'Command not recognized: "$command"');
-      await _flutterTts.speak('Command not recognized. Please try again.');
+      await _speakL('Command not recognized. Please try again.', 'कमांड पहचाना नहीं गया। कृपया फिर से प्रयास करें।');
     }
   }
 
@@ -88,12 +96,12 @@ class _EmergencyScreenState extends State<EmergencyScreen>
       _statusText = 'Fetching your location...';
     });
 
-    await _flutterTts.speak('Fetching your current location. Please wait.');
+    await _speakL('Fetching your current location. Please wait.', 'आपकी वर्तमान लोकेशन खोज रहे हैं। कृपया रुकें।');
 
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        await _flutterTts.speak('Location services are disabled. Please enable GPS.');
+        await _speakL('Location services are disabled. Please enable GPS.', 'लोकेशन सेवा बंद है। कृपया GPS चालू करें।');
         setState(() {
           _statusText = 'Location services disabled.';
           _isProcessing = false;
@@ -108,7 +116,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
 
       if (permission == LocationPermission.deniedForever ||
           permission == LocationPermission.denied) {
-        await _flutterTts.speak('Location permission denied.');
+        await _speakL('Location permission denied.', 'लोकेशन अनुमति अस्वीकार।');
         setState(() {
           _statusText = 'Location permission denied.';
           _isProcessing = false;
@@ -152,13 +160,13 @@ class _EmergencyScreenState extends State<EmergencyScreen>
         _isProcessing = false;
       });
 
-      await _flutterTts.speak(locationMessage);
+      await _flutterTts.speak(_isHindi ? 'आपकी वर्तमान लोकेशन है: $addressText।' : locationMessage);
     } catch (e) {
       setState(() {
         _statusText = 'Could not get location.';
         _isProcessing = false;
       });
-      await _flutterTts.speak('Unable to get your location. Please try again.');
+      await _speakL('Unable to get your location. Please try again.', 'आपकी लोकेशन नहीं मिल सकी। कृपया फिर से प्रयास करें।');
     }
   }
 
@@ -170,12 +178,12 @@ class _EmergencyScreenState extends State<EmergencyScreen>
       _statusText = 'Fetching guardian number...';
     });
 
-    await _flutterTts.speak('Calling your guardian. Please wait.');
+    await _speakL('Calling your guardian. Please wait.', 'आपके गार्डियन को कॉल कर रहे हैं। कृपया रुकें।');
 
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) {
-        await _flutterTts.speak('User not logged in. Cannot fetch guardian number.');
+        await _speakL('User not logged in. Cannot fetch guardian number.', 'यूजर लॉगिन नहीं है। गार्डियन नंबर नहीं मिल सकता।');
         setState(() {
           _statusText = 'User not logged in.';
           _isProcessing = false;
@@ -189,7 +197,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
           .get();
 
       if (!doc.exists || doc.data() == null) {
-        await _flutterTts.speak('User data not found in database.');
+        await _speakL('User data not found in database.', 'यूजर डेटा नहीं मिला।');
         setState(() {
           _statusText = 'User data not found.';
           _isProcessing = false;
@@ -200,7 +208,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
       final phone = doc.data()!['emergencyPhone'] as String?;
 
       if (phone == null || phone.isEmpty) {
-        await _flutterTts.speak('No emergency phone number saved.');
+        await _speakL('No emergency phone number saved.', 'कोई आपातकालीन फोन नंबर सेव नहीं है।');
         setState(() {
           _statusText = 'No emergency number saved.';
           _isProcessing = false;
@@ -208,7 +216,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
         return;
       }
 
-      await _flutterTts.speak('Calling $phone now.');
+      await _speakL('Calling $phone now.', '$phone पर कॉल कर रहे हैं।');
       
       bool? res = await FlutterPhoneDirectCaller.callNumber(phone);
       
@@ -218,7 +226,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
           _isProcessing = false;
         });
       } else {
-        await _flutterTts.speak('Unable to make a call on this device.');
+        await _speakL('Unable to make a call on this device.', 'इस डिवाइस से कॉल नहीं कर सकते।');
         setState(() {
           _statusText = 'Cannot make call.';
           _isProcessing = false;
@@ -229,7 +237,7 @@ class _EmergencyScreenState extends State<EmergencyScreen>
         _statusText = 'Error fetching guardian number.';
         _isProcessing = false;
       });
-      await _flutterTts.speak('An error occurred. Please try again.');
+      await _speakL('An error occurred. Please try again.', 'एक त्रुटि हुई। कृपया फिर से प्रयास करें।');
     }
   }
 

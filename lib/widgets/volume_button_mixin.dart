@@ -87,7 +87,7 @@ mixin VolumeButtonMixin<T extends StatefulWidget> on State<T> {
     // Start listening
     await _mixinTts.stop();
     if (mounted) setState(() => _mixinListening = true);
-    await _mixinTts.speak('Listening');
+    await _mixinTts.speakLocalized('Listening', 'सुन रहा हूँ');
     await Future.delayed(const Duration(milliseconds: 600)); // wait for TTS to start/finish
 
     await _mixinStt.listen(
@@ -115,7 +115,7 @@ mixin VolumeButtonMixin<T extends StatefulWidget> on State<T> {
   }
 
   Future<void> _handleVolumeDown() async {
-    await _mixinTts.speak('Going back');
+    await _mixinTts.speakLocalized('Going back', 'वापस जा रहे हैं');
     if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 

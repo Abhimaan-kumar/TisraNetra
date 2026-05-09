@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'home_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/language_preference_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -49,6 +50,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       );
       return;
     }
+
+    // Load the user's preferred TTS language before navigating
+    await LanguagePreferenceService().loadForCurrentUser();
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final userType = doc.data()?['userType'] as String?;

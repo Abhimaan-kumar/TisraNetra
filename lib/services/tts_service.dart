@@ -2,37 +2,49 @@
 //
 // Text-to-Speech service with urgency-aware speech control.
 // Adjusts speech rate, pitch, and repetition based on proximity urgency.
+// Respects the user's preferred language (English / Hindi) stored in
+// LanguagePreferenceService.
 
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'language_preference_service.dart';
 import 'path_analyzer_service.dart' show VoiceUrgency;
 import 'read_anything_service.dart' show TextScript, TextSegment;
 
 class TtsService {
   final FlutterTts _tts = FlutterTts();
 
-  // Default language for UI prompts (English, Indian accent)
-  static const String _langEnglish = 'en-IN';
-  // Hindi
-  static const String _langHindi   = 'hi-IN';
-
   // ── Default speech parameters ─────────────────────────────────────────────
   static const double _defaultRate   = 0.45;
   static const double _defaultPitch  = 1.0;
   static const double _defaultVolume = 1.0;
 
+  /// Returns the TTS language code based on the user's stored preference.
+  String get _preferredLang => LanguagePreferenceService().preferredLanguage;
+
   TtsService() {
-    _tts.setLanguage(_langEnglish);
+    _tts.setLanguage(_preferredLang);
     _tts.setSpeechRate(_defaultRate);
     _tts.setVolume(_defaultVolume);
     _tts.setPitch(_defaultPitch);
   }
 
-  /// Speak a plain English UI string at default urgency.
+  /// Whether the user prefers Hindi.
+  bool get isHindi => LanguagePreferenceService().isHindi;
+
+  /// Speak a plain UI string using the user's preferred language.
   Future<void> speak(String text) async {
     await _tts.stop();
     await _resetToDefaults();
     await _tts.speak(text);
+  }
+
+  /// Speak the appropriate text based on user's preferred language.
+  /// Pass both English and Hindi text; the correct one is auto-selected.
+  Future<void> speakLocalized(String english, String hindi) async {
+    await _tts.stop();
+    await _resetToDefaults();
+    await _tts.speak(isHindi ? hindi : english);
   }
 
   /// Speak with urgency-controlled speech parameters.
@@ -47,7 +59,7 @@ class TtsService {
     switch (urgency) {
       case VoiceUrgency.critical:
         // Fast, urgent, and repeated
-        await _tts.setLanguage(_langEnglish);
+        await _tts.setLanguage(_preferredLang);
         await _tts.setSpeechRate(0.60);
         await _tts.setPitch(1.2);
         await _tts.setVolume(1.0);
@@ -59,7 +71,7 @@ class TtsService {
 
       case VoiceUrgency.high:
         // Moderately fast, single announcement
-        await _tts.setLanguage(_langEnglish);
+        await _tts.setLanguage(_preferredLang);
         await _tts.setSpeechRate(0.55);
         await _tts.setPitch(1.1);
         await _tts.setVolume(1.0);
@@ -74,7 +86,7 @@ class TtsService {
 
       case VoiceUrgency.low:
         // Calm, slightly slower for informational content
-        await _tts.setLanguage(_langEnglish);
+        await _tts.setLanguage(_preferredLang);
         await _tts.setSpeechRate(0.40);
         await _tts.setPitch(0.95);
         await _tts.setVolume(0.9);
@@ -92,16 +104,16 @@ class TtsService {
       if (segment.text.trim().isEmpty) continue;
 
       final lang = segment.script == TextScript.devanagiri
-          ? _langHindi
-          : _langEnglish;
+          ? LanguagePreferenceService.hindi
+          : LanguagePreferenceService.english;
 
       await _tts.setLanguage(lang);
       await _tts.awaitSpeakCompletion(true);
       await _tts.speak(segment.text.trim());
     }
 
-    // Reset back to English for subsequent UI prompts
-    await _tts.setLanguage(_langEnglish);
+    // Reset back to the user's preferred language for subsequent UI prompts
+    await _tts.setLanguage(_preferredLang);
   }
 
   Future<void> stop() async => await _tts.stop();
@@ -111,7 +123,7 @@ class TtsService {
   // ── Internal helpers ──────────────────────────────────────────────────────
 
   Future<void> _resetToDefaults() async {
-    await _tts.setLanguage(_langEnglish);
+    await _tts.setLanguage(_preferredLang);
     await _tts.setSpeechRate(_defaultRate);
     await _tts.setPitch(_defaultPitch);
     await _tts.setVolume(_defaultVolume);

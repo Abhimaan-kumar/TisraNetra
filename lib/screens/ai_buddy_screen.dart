@@ -174,7 +174,7 @@ Rules:
     _volumeService.initialize(
       onVolumeUp: _handleVolumeUp,
       onVolumeDown: () async {
-        await _ttsService.speak('Going back to home');
+        await _ttsService.speakLocalized('Going back to home', 'होम पर वापस जा रहे हैं');
         if (mounted) Navigator.pop(context);
       },
     );
@@ -194,7 +194,7 @@ Rules:
       _listening = true;
       _recognizedText = '';
     });
-    await _ttsService.speak('Listening...');
+    await _ttsService.speakLocalized('Listening...', 'सुन रहा हूँ...');
 
     await _speech.listen(
       onResult: (result) {

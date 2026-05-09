@@ -59,7 +59,10 @@ class _CurrencyScreenState extends State<CurrencyScreen>
     _initCamera().then((_) {
       if (_camReady) _startScan();
     });
-    _tts.speak('Currency detection screen. Scanning will start automatically.');
+    _tts.speakLocalized(
+      'Currency detection screen. Scanning will start automatically.',
+      'मुद्रा पहचान स्क्रीन। स्कैनिंग अपने आप शुरू होगी।',
+    );
   }
 
   @override
@@ -168,7 +171,10 @@ class _CurrencyScreenState extends State<CurrencyScreen>
       _scanning = true;
       _status = 'Point camera at currency…';
     });
-    _tts.speak('Scanning started. Hold camera steady over currency.');
+    _tts.speakLocalized(
+      'Scanning started. Hold camera steady over currency.',
+      'स्कैनिंग शुरू। कैमरा नोट के ऊपर स्थिर रखें।',
+    );
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 500), (_) => _checkFrame());
   }
@@ -221,15 +227,24 @@ class _CurrencyScreenState extends State<CurrencyScreen>
           _status = 'Detection complete!';
         });
         final notes = result.detectedNotes.map((n) => '₹$n').join(', ');
-        await _tts.speak('Detected ${result.detectedNotes.length} notes: $notes. Total is ${result.totalAmount} rupees.');
+        await _tts.speakLocalized(
+          'Detected ${result.detectedNotes.length} notes: $notes. Total is ${result.totalAmount} rupees.',
+          '${result.detectedNotes.length} नोट मिले: $notes। कुल ${result.totalAmount} रुपये।',
+        );
       } else {
         setState(() => _status = 'No notes found. Tap repeat to scan again.');
-        await _tts.speak('Could not detect currency. Ensure notes are well lit.');
+        await _tts.speakLocalized(
+          'Could not detect currency. Ensure notes are well lit.',
+          'मुद्रा पहचान नहीं हो सकी। नोट अच्छी रोशनी में रखें।',
+        );
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _status = 'Error: $e');
-      await _tts.speak('An error occurred. Please try again.');
+      await _tts.speakLocalized(
+        'An error occurred. Please try again.',
+        'एक त्रुटि हुई। कृपया फिर से प्रयास करें।',
+      );
     } finally {
       if (mounted) setState(() => _detecting = false);
     }
@@ -237,12 +252,17 @@ class _CurrencyScreenState extends State<CurrencyScreen>
 
   void _speak() {
     if (_last == null) {
-      _tts.speak('No result yet. Please scan currency first.');
+      _tts.speakLocalized(
+        'No result yet. Please scan currency first.',
+        'अभी कोई परिणाम नहीं। पहले मुद्रा स्कैन करें।',
+      );
       return;
     }
-    _tts.speak(
+    _tts.speakLocalized(
       'Total amount is ${_last!.totalAmount} rupees. '
       'Notes: ${_last!.detectedNotes.map((n) => "₹$n").join(", ")}.',
+      'कुल राशि ${_last!.totalAmount} रुपये। '
+      'नोट: ${_last!.detectedNotes.map((n) => "₹$n").join(", ")}।',
     );
   }
 
@@ -279,7 +299,7 @@ class _CurrencyScreenState extends State<CurrencyScreen>
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () {
-            _tts.speak('Going back');
+            _tts.speakLocalized('Going back', 'वापस जा रहे हैं');
             Navigator.pop(context);
           },
         ),

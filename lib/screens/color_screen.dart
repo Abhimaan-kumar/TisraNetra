@@ -33,8 +33,9 @@ class _ColorScreenState extends State<ColorScreen>
     WidgetsBinding.instance.addObserver(this);
     initVolumeButtonListener();
     _initCamera();
-    _tts.speak(
+    _tts.speakLocalized(
       'Color detection screen. Point camera at any object to detect its color.',
+      'रंग पहचान स्क्रीन। किसी भी वस्तु पर कैमरा करें रंग जानने के लिए।',
     );
   }
 

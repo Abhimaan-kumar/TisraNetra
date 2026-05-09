@@ -166,8 +166,9 @@ class _PersonIdentificationScreenState
         _initialized = true;
         _status = 'Ready';
       });
-      _tts.speak(
+      _tts.speakLocalized(
         'Person identification ready. Point the camera at a person.',
+        'व्यक्ति पहचान तैयार है। कैमरा किसी व्यक्ति की ओर करें।',
       );
     } catch (e) {
       debugPrint('[PersonID] Init error: $e');
@@ -177,7 +178,7 @@ class _PersonIdentificationScreenState
           _status = 'Initialisation failed';
         });
       }
-      _tts.speak('Failed to initialise. Please restart the screen.');
+      _tts.speakLocalized('Failed to initialise. Please restart the screen.', 'आरंभ करने में विफल। कृपया स्क्रीन को फिर से चालू करें।');
     }
   }
 
@@ -403,9 +404,9 @@ class _PersonIdentificationScreenState
       _lastSpokenName = bestName;
       _lastSpeakTime = now;
       if (bestName == 'Unknown') {
-        _tts.speak('Unknown person.');
+        _tts.speakLocalized('Unknown person.', 'अनजान व्यक्ति।');
       } else {
-        _tts.speak('This is $bestName.');
+        _tts.speakLocalized('This is $bestName.', 'यह $bestName है।');
       }
     }
 
@@ -434,9 +435,10 @@ class _PersonIdentificationScreenState
       _status = _kPoses[0].$2;
     });
 
-    await _tts.speak(
+    await _tts.speakLocalized(
       'Starting face enrollment. Ask the person to '
       '${_kPoses[0].$2.toLowerCase()}.',
+      'चेहरा पंजीकरण शुरू हो रहा है। व्यक्ति को सामने देखने के लिए कहें।',
     );
     await Future.delayed(const Duration(seconds: 2));
     if (mounted) _capturingPose = false; // allow first capture
@@ -462,7 +464,7 @@ class _PersonIdentificationScreenState
     if (_saveStep < _kPoses.length - 1) {
       // Show "Captured ✓" briefly
       setState(() => _status = '${_kPoses[_saveStep].$1} captured ✓');
-      await _tts.speak('Captured.');
+      await _tts.speakLocalized('Captured.', 'कैप्चर हो गया।');
       await Future.delayed(const Duration(milliseconds: 1200));
       if (!mounted) return;
 
@@ -471,13 +473,16 @@ class _PersonIdentificationScreenState
         _saveStep++;
         _status = _kPoses[_saveStep].$2;
       });
-      await _tts.speak('Now ${_kPoses[_saveStep].$2.toLowerCase()}.');
+      await _tts.speakLocalized(
+        'Now ${_kPoses[_saveStep].$2.toLowerCase()}.',
+        'अब ${_saveStep == 1 ? "चेहरा बाईं ओर घुमाएं" : _saveStep == 2 ? "चेहरा दाईं ओर घुमाएं" : _saveStep == 3 ? "सिर थोड़ा ऊपर करें" : "सिर थोड़ा नीचे करें"}।',
+      );
       await Future.delayed(const Duration(seconds: 2));
       if (mounted) _capturingPose = false; // allow next capture
     } else {
       // All 5 poses captured
       setState(() => _status = 'All views captured!');
-      await _tts.speak('All views captured. Please enter the person\'s name.');
+      await _tts.speakLocalized('All views captured. Please enter the person\'s name.', 'सभी दृश्य कैप्चर हो गए। कृपया व्यक्ति का नाम दर्ज करें।');
       if (mounted) _showNameDialog();
     }
   }
@@ -490,7 +495,7 @@ class _PersonIdentificationScreenState
       _capturingPose = true;
       _status = 'Save cancelled';
     });
-    _tts.speak('Face enrollment cancelled.');
+    _tts.speakLocalized('Face enrollment cancelled.', 'चेहरा पंजीकरण रद्द कर दिया गया।');
   }
 
   Future<void> _savePerson(String name) async {
@@ -505,7 +510,7 @@ class _PersonIdentificationScreenState
       _status = '$name saved successfully!';
       _lastSpokenName = ''; // reset so next identification speaks
     });
-    _tts.speak('$name has been saved. You can now identify them.');
+    _tts.speakLocalized('$name has been saved. You can now identify them.', '$name को सेव कर लिया गया है। अब आप उन्हें पहचान सकते हैं।');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -518,9 +523,9 @@ class _PersonIdentificationScreenState
     if (_isSaving) {
       _cancelSave();
     } else if (_identifiedName.isNotEmpty && _identifiedName != 'Unknown') {
-      await _tts.speak('This is $_identifiedName.');
+      await _tts.speakLocalized('This is $_identifiedName.', 'यह $_identifiedName है।');
     } else {
-      await _tts.speak('Unknown person. Say "save" to save this face.');
+      await _tts.speakLocalized('Unknown person. Say "save" to save this face.', 'अनजान व्यक्ति। इस चेहरे को सेव करने के लिए "सेव" बोलें।');
     }
   }
 
@@ -532,17 +537,13 @@ class _PersonIdentificationScreenState
         cmd.contains('bachao') ||
         cmd.contains('store')) {
       if (_isSaving) {
-        await _tts
-            .speak(hi ? 'पहले से सेव हो रहा है।' : 'Already saving a face.');
+        await _tts.speakLocalized('Already saving a face.', 'पहले से सेव हो रहा है।');
       } else if (_identifiedName == 'Unknown' && _faces.isNotEmpty) {
         _startSaveFlow();
       } else if (_faces.isEmpty) {
-        await _tts.speak(
-            hi ? 'कोई चेहरा नहीं मिला।' : 'No face detected to save.');
+        await _tts.speakLocalized('No face detected to save.', 'कोई चेहरा नहीं मिला।');
       } else {
-        await _tts.speak(hi
-            ? 'यह व्यक्ति पहले से पहचाना गया है।'
-            : 'This person is already identified.');
+        await _tts.speakLocalized('This person is already identified.', 'यह व्यक्ति पहले से पहचाना गया है।');
       }
     } else if (cmd.contains('cancel') || cmd.contains('रद्द')) {
       if (_isSaving) _cancelSave();
@@ -550,10 +551,9 @@ class _PersonIdentificationScreenState
         cmd.contains('kaun') ||
         cmd.contains('name')) {
       if (_identifiedName.isNotEmpty && _identifiedName != 'Unknown') {
-        await _tts
-            .speak(hi ? 'यह $_identifiedName है।' : 'This is $_identifiedName.');
+        await _tts.speakLocalized('This is $_identifiedName.', 'यह $_identifiedName है।');
       } else {
-        await _tts.speak(hi ? 'अनजान व्यक्ति।' : 'Unknown person.');
+        await _tts.speakLocalized('Unknown person.', 'अनजान व्यक्ति।');
       }
     } else if (cmd.contains('list') ||
         cmd.contains('persons') ||
@@ -561,9 +561,7 @@ class _PersonIdentificationScreenState
         cmd.contains('hatao')) {
       _showPersonsDialog();
     } else {
-      await _tts.speak(hi
-          ? 'कृपया "save", "cancel", या "who" बोलें।'
-          : 'Say "save", "cancel", "who is this", or "list persons".');
+      await _tts.speakLocalized('Say "save", "cancel", "who is this", or "list persons".', 'कृपया "सेव", "कैंसिल", या "यह कौन है" बोलें।');
     }
   }
 
@@ -705,7 +703,7 @@ class _PersonIdentificationScreenState
                           await _dbService.deletePerson(p.id);
                           await _loadPersons();
                           if (ctx.mounted) Navigator.pop(ctx);
-                          _tts.speak('${p.name} deleted.');
+                          _tts.speakLocalized('${p.name} deleted.', '${p.name} को हटा दिया गया।');
                           _showPersonsDialog(); // refresh
                         },
                       ),
@@ -755,7 +753,7 @@ class _PersonIdentificationScreenState
           IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.white),
             onPressed: () {
-              _tts.speak('Going back');
+              _tts.speakLocalized('Going back', 'वापस जा रहे हैं');
               Navigator.pop(context);
             },
           ),
@@ -1082,9 +1080,9 @@ class _PersonIdentificationScreenState
                     onPressed: () {
                       if (_identifiedName.isNotEmpty &&
                           _identifiedName != 'Unknown') {
-                        _tts.speak('This is $_identifiedName.');
+                        _tts.speakLocalized('This is $_identifiedName.', 'यह $_identifiedName है।');
                       } else {
-                        _tts.speak('Unknown person.');
+                        _tts.speakLocalized('Unknown person.', 'अनजान व्यक्ति।');
                       }
                     },
                     icon: const Icon(Icons.volume_up, size: 20),

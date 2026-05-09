@@ -164,15 +164,19 @@ class _HomeScreenState extends State<HomeScreen> {
     _volService.initialize(
       onVolumeUp: _onVolumeUp,
       onVolumeDown: () async {
-        await _tts.speak('You are already on the home screen.');
+        await _tts.speakLocalized(
+          'You are already on the home screen.',
+          'आप पहले से होम स्क्रीन पर हैं।',
+        );
       },
     );
   }
 
   Future<void> _welcome() async {
     await Future.delayed(const Duration(milliseconds: 800));
-    await _tts.speak(
+    await _tts.speakLocalized(
       'Welcome to LifeLens. Press volume up and say a feature name to open it.',
+      'लाइफ लेंस में आपका स्वागत है। वॉल्यूम अप दबाएं और फीचर का नाम बोलें।',
     );
   }
 
@@ -186,13 +190,16 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (!_sttReady) {
-      await _tts.speak('Microphone not available.');
+      await _tts.speakLocalized(
+        'Microphone not available.',
+        'माइक्रोफोन उपलब्ध नहीं है।',
+      );
       return;
     }
 
     await _tts.stop();
     if (mounted) setState(() => _listening = true);
-    await _tts.speak('Listening…');
+    await _tts.speakLocalized('Listening…', 'सुन रहा हूँ…');
 
     await _speech.listen(
       onResult: (result) async {
@@ -201,7 +208,10 @@ class _HomeScreenState extends State<HomeScreen> {
         if (result.finalResult) {
           setState(() => _listening = false);
           if (words.isEmpty) {
-            await _tts.speak('I did not hear anything. Press volume up again.');
+            await _tts.speakLocalized(
+              'I did not hear anything. Press volume up again.',
+              'मुझे कुछ सुनाई नहीं दिया। वॉल्यूम अप फिर से दबाएं।',
+            );
           } else {
             await _handleCommand(words);
           }
@@ -220,7 +230,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Command dispatch ──────────────────────────────────────────────────────────
 
   Future<void> _handleCommand(String words) async {
-    final isHindi = RegExp(r'[\u0900-\u097F]').hasMatch(words);
+    final spokenHindi = RegExp(r'[\u0900-\u097F]').hasMatch(words);
+    final prefersHindi = _tts.isHindi;
 
     String? matchedKey;
     for (final key in _cmdMap.keys) {
@@ -231,7 +242,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (matchedKey == null) {
-      if (isHindi) {
+      if (spokenHindi || prefersHindi) {
         await _tts.speak(
           'माफ कीजिए, मुझे समझ नहीं आया। '
           'वॉल्यूम अप दबाकर फिर से बोलें।',
@@ -247,7 +258,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final (label, builder) = _cmdMap[matchedKey]!;
 
-    if (isHindi) {
+    if (spokenHindi || prefersHindi) {
       await _tts.speak('$label खोल रहे हैं।');
     } else {
       await _tts.speak('Opening $label.');
@@ -257,13 +268,10 @@ class _HomeScreenState extends State<HomeScreen> {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => builder()));
 
     if (mounted) {
-      if (isHindi) {
-        await _tts.speak(
-          'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।',
-        );
-      } else {
-        await _tts.speak('Back to home. Press volume up to open a feature.');
-      }
+      await _tts.speakLocalized(
+        'Back to home. Press volume up to open a feature.',
+        'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।',
+      );
     }
   }
 
@@ -421,8 +429,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                 : const ProfileScreen(),
                           ),
                         );
-                        await _tts.speak(
+                        await _tts.speakLocalized(
                           'Back to home. Press volume up to open a feature.',
+                          'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।',
                         );
                       },
                       child: Container(

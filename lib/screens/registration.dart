@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'login.dart'; // added import
 import 'home_screen.dart'; // added
 import '../services/fcm_service.dart';
+import '../services/language_preference_service.dart';
 import '../theme/app_theme.dart';
 
 class RegistrationScreen extends StatefulWidget {
@@ -24,6 +25,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final TextEditingController emergencyPhoneController = TextEditingController();
 
   String userType = 'Client';
+  String preferredLanguage = 'English';
 
   bool isLoading = false;
   bool _obscurePassword = true;
@@ -49,9 +51,13 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         'age': int.parse(ageController.text.trim()),
         'email': emailController.text.trim(),
         'userType': userType,
+        'preferredLanguage': preferredLanguage,
         'emergencyPhone': emergencyPhoneController.text.trim(),
         'createdAt': Timestamp.now(),
       });
+
+      // Apply the language preference immediately
+      LanguagePreferenceService().setPreference(preferredLanguage);
 
       // Save FCM token for push notifications (if it fails, still proceed with registration)
       try {
@@ -234,6 +240,33 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         validator: (value) =>
                             (value == null || value.isEmpty)
                                 ? "Select user type"
+                                : null,
+                      ),
+                      const SizedBox(height: 16),
+                      // Preferred Language
+                      DropdownButtonFormField<String>(
+                        value: preferredLanguage,
+                        dropdownColor: AppTheme.card,
+                        style: GoogleFonts.inter(color: AppTheme.textPrimary),
+                        decoration: const InputDecoration(
+                          labelText: "Preferred Language to Listen",
+                          prefixIcon: Icon(Icons.translate_rounded,
+                              color: AppTheme.textSecondary, size: 20),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                              value: 'English', child: Text('English')),
+                          DropdownMenuItem(
+                              value: 'Hindi', child: Text('Hindi')),
+                        ],
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() => preferredLanguage = val);
+                          }
+                        },
+                        validator: (value) =>
+                            (value == null || value.isEmpty)
+                                ? "Select preferred language"
                                 : null,
                       ),
                       const SizedBox(height: 16),

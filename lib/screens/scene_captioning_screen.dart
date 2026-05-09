@@ -35,7 +35,10 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
     WidgetsBinding.instance.addObserver(this);
     initVolumeButtonListener();
     _initCamera();
-    _tts.speak('Scene captioning. I will describe what is in front of you.');
+    _tts.speakLocalized(
+      'Scene captioning. I will describe what is in front of you.',
+      'दृश्य वर्णन। मैं आपके सामने क्या है बताउंगा।',
+    );
   }
 
   @override void didChangeAppLifecycleState(AppLifecycleState s) {

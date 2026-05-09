@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'home_screen.dart'; // added
 import '../services/fcm_service.dart';
+import '../services/language_preference_service.dart';
 import '../theme/app_theme.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -27,6 +28,9 @@ class _LoginScreenState extends State<LoginScreen> {
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
       );
+
+      // Load preferred TTS language for the signed-in user
+      await LanguagePreferenceService().loadForCurrentUser();
 
       // Save FCM token for push notifications (if it fails, still proceed with login)
       try {

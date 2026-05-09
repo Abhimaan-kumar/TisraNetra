@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/language_preference_service.dart';
 import '../theme/app_theme.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -21,6 +22,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _phoneCtrl = TextEditingController();
   final _emergencyCtrl = TextEditingController();
 
+  String _preferredLanguage = 'English';
+
   bool _loading = false;
   bool _editing = false;
 
@@ -36,6 +39,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _ageCtrl.text = (data['age'] ?? '').toString();
           _phoneCtrl.text = (data['phone'] ?? '').toString();
           _emergencyCtrl.text = (data['emergencyPhone'] ?? '').toString();
+          _preferredLanguage = (data['preferredLanguage'] ?? 'English').toString();
         }
       });
     }
@@ -59,9 +63,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'age': int.tryParse(_ageCtrl.text.trim()) ?? 0,
         'phone': _phoneCtrl.text.trim(),
         'emergencyPhone': _emergencyCtrl.text.trim(),
+        'preferredLanguage': _preferredLanguage,
         'updatedAt': FieldValue.serverTimestamp(),
       };
       await FirebaseFirestore.instance.collection('users').doc(uid).set(data, SetOptions(merge: true));
+
+      // Update the language preference singleton immediately
+      LanguagePreferenceService().setPreference(_preferredLanguage);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated')));
       setState(() => _editing = false);
       // refresh
@@ -332,6 +340,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       return null;
                                     },
                                   ),
+                                  const SizedBox(height: 14),
+                                  // Preferred Language
+                                  DropdownButtonFormField<String>(
+                                    value: _preferredLanguage,
+                                    dropdownColor: AppTheme.card,
+                                    style: GoogleFonts.inter(
+                                        color: AppTheme.textPrimary),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Preferred Language to Listen',
+                                      prefixIcon: Icon(
+                                          Icons.translate_rounded,
+                                          color: AppTheme.textSecondary,
+                                          size: 20),
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(
+                                          value: 'English',
+                                          child: Text('English')),
+                                      DropdownMenuItem(
+                                          value: 'Hindi',
+                                          child: Text('Hindi')),
+                                    ],
+                                    onChanged: _editing
+                                        ? (val) {
+                                            if (val != null) {
+                                              setState(() =>
+                                                  _preferredLanguage = val);
+                                            }
+                                          }
+                                        : null,
+                                  ),
                                   const SizedBox(height: 24),
                                   if (_editing)
                                     Row(
@@ -395,6 +434,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                               (d['emergencyPhone'] ??
                                                                       '')
                                                                   .toString();
+                                                          setState(() {
+                                                            _preferredLanguage =
+                                                                (d['preferredLanguage'] ?? 'English')
+                                                                    .toString();
+                                                          });
                                                         }
                                                       });
                                                     },

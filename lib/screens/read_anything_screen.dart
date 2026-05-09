@@ -80,8 +80,9 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen>
     WidgetsBinding.instance.addObserver(this);
     initVolumeButtonListener();
     _initCamera();
-    _ttsService.speak(
-        'Read text screen. Point your camera at any text and I will read it automatically.');
+    _ttsService.speakLocalized(
+        'Read text screen. Point your camera at any text and I will read it automatically.',
+        'टेक्स्ट पढ़ने वाली स्क्रीन। अपना कैमरा किसी भी टेक्स्ट की ओर करें और मैं उसे स्वचालित रूप से पढ़ूँगा।');
   }
 
   @override
@@ -195,7 +196,7 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen>
     if (!mounted) return;
     if (!result.hasText || result.text.isEmpty) {
       _setStatus('No text found — scanning again');
-      await _ttsService.speak('No text found. Scanning again.');
+      await _ttsService.speakLocalized('No text found. Scanning again.', 'कोई टेक्स्ट नहीं मिला। फिर से स्कैन कर रहा हूँ।');
       await Future.delayed(const Duration(seconds: 1));
       _startScan();
       return;
@@ -213,7 +214,7 @@ class _ReadAnythingScreenState extends State<ReadAnythingScreen>
   }
 
   Future<void> _repeatText() async {
-    if (_segments.isEmpty) { await _ttsService.speak('Nothing read yet.'); return; }
+    if (_segments.isEmpty) { await _ttsService.speakLocalized('Nothing read yet.', 'अभी तक कुछ नहीं पढ़ा गया।'); return; }
     await _ttsService.speakSegments(_segments);
   }
 

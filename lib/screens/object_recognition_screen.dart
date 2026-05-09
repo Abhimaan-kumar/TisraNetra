@@ -39,7 +39,10 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
     WidgetsBinding.instance.addObserver(this);
     initVolumeButtonListener();
     _initCamera();
-    _tts.speak('Object recognition. Scanning for objects automatically.');
+    _tts.speakLocalized(
+      'Object recognition. Scanning for objects automatically.',
+      'वस्तु पहचान। वस्तुओं की स्वचालित स्कैनिंग शुरू हो रही है।',
+    );
   }
 
   @override void didChangeAppLifecycleState(AppLifecycleState s) {
@@ -94,7 +97,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
     if (_scanning) return;
     _keepScanning = true;
     setState(() { _scanning = true; _status = 'Scanning…'; });
-    _tts.speak('Scanning started.');
+    _tts.speakLocalized('Scanning started.', 'स्कैनिंग शुरू।');
     if (!mounted || !_camReady || _cam == null) return;
     _cam!.startImageStream((image) => _processFrame(image));
   }
@@ -102,7 +105,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   void _stopScan() {
     _keepScanning = false;
     setState(() { _scanning = false; _status = 'Paused.'; });
-    _tts.speak('Scanning paused.');
+    _tts.speakLocalized('Scanning paused.', 'स्कैनिंग रुकी।');
     if (_cam?.value.isStreamingImages ?? false) {
       _cam!.stopImageStream();
     }
@@ -164,7 +167,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
         backgroundColor: Colors.black,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () { _keepScanning = false; _tts.speak('Going back'); Navigator.pop(context); },
+          onPressed: () { _keepScanning = false; _tts.speakLocalized('Going back', 'वापस जा रहे हैं'); Navigator.pop(context); },
         ),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Object Recognition', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),

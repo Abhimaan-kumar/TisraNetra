@@ -42,7 +42,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
         if (_currentRequestId != null) {
           await _cancelRequest();
         } else {
-          await _ttsService.speak('Going back to home');
+          await _ttsService.speakLocalized('Going back to home', 'होम पर वापस जा रहे हैं');
           if (mounted) Navigator.pop(context);
         }
       },

@@ -187,7 +187,7 @@ class _NavigateScreenState extends State<NavigateScreen>
           _walkActive = false;
           _navSnapshot = null;
         });
-        _tts.speak('You have arrived at your destination. Well done!');
+        _tts.speakLocalized('You have arrived at your destination. Well done!', 'आप अपनी मंजिल पर पहुंच गए हैं। बहुत बढ़िया!');
       };
       _navService.onStateChange = (state) {
         if (!mounted) return;
@@ -223,10 +223,11 @@ class _NavigateScreenState extends State<NavigateScreen>
         _initialized = true;
       });
 
-      await _tts.speak(
+      await _tts.speakLocalized(
         'Navigation ready. Say walk mode for obstacle detection, '
         'or destination mode to navigate somewhere. '
         'Press volume up to speak.',
+        'नेविगेशन तैयार है। बाधाओं का पता लगाने के लिए वॉक मोड बोलें, या कहीं नेविगेट करने के लिए डेस्टिनेशन मोड बोलें। बोलने के लिए वॉल्यूम अप दबाएं।',
       );
     } catch (e) {
       debugPrint('[Navigate] Init error: $e');
@@ -235,7 +236,7 @@ class _NavigateScreenState extends State<NavigateScreen>
           _initError = e.toString();
         });
       }
-      _tts.speak('Failed to initialize navigation. Please restart.');
+      _tts.speakLocalized('Failed to initialize navigation. Please restart.', 'नेविगेशन आरंभ करने में विफल। कृपया फिर से चालू करें।');
     }
   }
 
@@ -466,9 +467,9 @@ class _NavigateScreenState extends State<NavigateScreen>
     _lastFaceAnnounce = now;
 
     if (name == 'Unknown person') {
-      _tts.speak('Unknown person ahead.');
+      _tts.speakLocalized('Unknown person ahead.', 'सामने एक अनजान व्यक्ति है।');
     } else {
-      _tts.speak('$name ahead.');
+      _tts.speakLocalized('$name ahead.', 'सामने $name है।');
     }
   }
 
@@ -484,9 +485,10 @@ class _NavigateScreenState extends State<NavigateScreen>
     });
     await _initCamera();
     _pathAnalyzer.resetCooldowns();
-    await _tts.speak(
+    await _tts.speakLocalized(
       'Walk mode active. I will guide you through obstacles. '
       'Walk straight ahead. Say stop to pause, or back to return.',
+      'वॉक मोड सक्रिय है। मैं आपको बाधाओं से बचाऊंगा। सीधे आगे बढ़ें। रोकने के लिए "स्टॉप" बोलें, या वापस जाने के लिए "बैक" बोलें।',
     );
   }
 
@@ -498,8 +500,9 @@ class _NavigateScreenState extends State<NavigateScreen>
     });
     await _initCamera();
     _pathAnalyzer.resetCooldowns();
-    await _tts.speak(
+    await _tts.speakLocalized(
       'Destination mode. Press volume up and say where you want to go.',
+      'डेस्टिनेशन मोड। वॉल्यूम अप दबाएं और बताएं कि आप कहाँ जाना चाहते हैं।',
     );
   }
 
@@ -515,8 +518,9 @@ class _NavigateScreenState extends State<NavigateScreen>
       _detections = [];
       _pathAnalysis = null;
     });
-    _tts.speak(
+    _tts.speakLocalized(
       'Back to mode selection. Say walk mode or destination mode.',
+      'मोड चयन पर वापस। "वॉक मोड" या "डेस्टिनेशन मोड" बोलें।',
     );
   }
 
@@ -528,9 +532,10 @@ class _NavigateScreenState extends State<NavigateScreen>
   Future<void> onVolumeUp() async {
     switch (_mode) {
       case _NavMode.modeSelect:
-        await _tts.speak(
+        await _tts.speakLocalized(
           'Say walk mode for obstacle detection, '
           'or destination mode to navigate somewhere.',
+          'बाधाओं का पता लगाने के लिए "वॉक मोड" बोलें, या कहीं नेविगेट करने के लिए "डेस्टिनेशन मोड" बोलें।',
         );
         break;
       case _NavMode.walkMode:
@@ -539,7 +544,7 @@ class _NavigateScreenState extends State<NavigateScreen>
           _pathAnalyzer.resetCooldowns();
           await _tts.speak(_pathAnalysis!.guidance);
         } else {
-          await _tts.speak('Walk mode active. Point the camera ahead.');
+          await _tts.speakLocalized('Walk mode active. Point the camera ahead.', 'वॉक मोड सक्रिय है। कैमरा आगे की ओर रखें।');
         }
         break;
       case _NavMode.destinationMode:
@@ -553,10 +558,10 @@ class _NavigateScreenState extends State<NavigateScreen>
           // Also announce obstacles if any
           if (_detections.isNotEmpty) {
             final names = _detections.take(3).map((d) => d.label).toSet().join(', ');
-            await _tts.speak('Nearby obstacles: $names.');
+            await _tts.speakLocalized('Nearby obstacles: $names.', 'आसपास की बाधाएं: $names.');
           }
         } else {
-          await _tts.speak('Say where you want to go.');
+          await _tts.speakLocalized('Say where you want to go.', 'बताएं कि आप कहाँ जाना चाहते हैं।');
         }
         break;
     }
@@ -704,7 +709,7 @@ class _NavigateScreenState extends State<NavigateScreen>
       _destStatus = 'Finding route to: $destination...';
       _navSnapshot = null;
     });
-    await _tts.speak('Finding route to $destination. Please wait.');
+    await _tts.speakLocalized('Finding route to $destination. Please wait.', '$destination के लिए रास्ता खोज रहे हैं। कृपया प्रतीक्षा करें।');
 
     final route = await _navService.getDirections(destination);
     if (!mounted) return;
@@ -712,12 +717,13 @@ class _NavigateScreenState extends State<NavigateScreen>
     if (route == null) {
       if (_navService.lastPosition == null) {
         setState(() => _destStatus = 'Could not get location.');
-        await _tts.speak('Sorry, I could not get your current location. Make sure location services are enabled.');
+        await _tts.speakLocalized('Sorry, I could not get your current location. Make sure location services are enabled.', 'क्षमा करें, मैं आपकी वर्तमान लोकेशन नहीं पा सका। सुनिश्चित करें कि लोकेशन सेवा चालू है।');
       } else {
         setState(() => _destStatus = 'Could not find route. Try again.');
-        await _tts.speak(
+        await _tts.speakLocalized(
           'Sorry, I could not find a walking route to $destination. '
           'Press volume up and say the destination again.',
+          'क्षमा करें, मुझे $destination तक पैदल जाने का कोई रास्ता नहीं मिला। वॉल्यूम अप दबाएं और गंतव्य का नाम दोबारा बोलें।',
         );
       }
       return;
@@ -729,11 +735,12 @@ class _NavigateScreenState extends State<NavigateScreen>
       _navActive = true;
     });
 
-    await _tts.speak(
+    await _tts.speakLocalized(
       'Route found to ${route.destinationAddress}. '
       '${route.totalDistance}, estimated ${route.totalDuration}. '
       '${route.steps.length} steps. '
       'Starting navigation. I will also watch for obstacles.',
+      '${route.destinationAddress} के लिए रास्ता मिल गया है। कुल दूरी ${route.totalDistance}, अनुमानित समय ${route.totalDuration}। नेविगेशन शुरू हो रहा है, मैं बाधाओं पर भी नज़र रखूँगा।',
     );
 
     _walkActive = true; // Enable obstacle detection during navigation
@@ -802,7 +809,7 @@ class _NavigateScreenState extends State<NavigateScreen>
             icon: const Icon(Icons.arrow_back, color: Colors.white),
             onPressed: () {
               if (_mode == _NavMode.modeSelect) {
-                _tts.speak('Going back');
+                _tts.speakLocalized('Going back', 'वापस जा रहे हैं');
                 Navigator.pop(context);
               } else {
                 _exitToModeSelect();
@@ -1396,9 +1403,9 @@ class _NavigateScreenState extends State<NavigateScreen>
                 setState(() => _walkActive = !_walkActive);
                 if (_walkActive) {
                   _pathAnalyzer.resetCooldowns();
-                  _tts.speak('Walk mode resumed.');
+                  _tts.speakLocalized('Walk mode resumed.', 'वॉक मोड चालू।');
                 } else {
-                  _tts.speak('Walk mode paused.');
+                  _tts.speakLocalized('Walk mode paused.', 'वॉक मोड रुका।');
                 }
               },
               icon: Icon(
@@ -1821,7 +1828,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                     _destStatus = 'Navigation stopped.';
                     _currentInstruction = '';
                   });
-                  _tts.speak('Navigation stopped.');
+                  _tts.speakLocalized('Navigation stopped.', 'नेविगेशन रुक गया।');
                 },
                 icon: const Icon(Icons.stop_circle_outlined, size: 24),
                 label: Text('Stop',
