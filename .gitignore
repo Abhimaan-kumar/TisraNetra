@@ -22,4 +22,3 @@ build/
 # IntelliJ / Android Studio
 .idea/
 *.iml
-.env
