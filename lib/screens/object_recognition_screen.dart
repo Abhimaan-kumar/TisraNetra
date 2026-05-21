@@ -51,7 +51,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
   }
   @override void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _keepScanning = false; _cam?.dispose(); _tts.dispose(); _svc.dispose();
+    _keepScanning = false; _cam?.dispose(); _tts.stop(); _svc.dispose();
     super.dispose();
   }
 
@@ -130,32 +130,33 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
       if (result == null || result.objects.isEmpty) {
         setState(() { 
           _last = null; 
-          _status = 'Scanning area...'; 
+          _status = 'Scanning area...';
+          _recognizing = false;
         });
       } else {
         _successNo++;
+        final timeSinceSpeak = DateTime.now().difference(_lastSpeakTime).inMilliseconds;
+        final isNew = !result.isSimilarTo(_prev);
+        final shouldSpeak = timeSinceSpeak > 2500 || (isNew && timeSinceSpeak > 1000);
+
+        // Single batched setState for detection result
         setState(() {
           _last = result;
           _status = '${result.objects.length} object(s) detected';
+          _recognizing = false;
+          if (shouldSpeak) _isSpeaking = true;
         });
 
-        final timeSinceSpeak = DateTime.now().difference(_lastSpeakTime).inMilliseconds;
-        final isNew = !result.isSimilarTo(_prev);
-
-        // Only speak every 2.5 seconds OR if the scene completely changed
-        if (timeSinceSpeak > 2500 || (isNew && timeSinceSpeak > 1000)) {
+        if (shouldSpeak) {
           _prev = result;
           _lastSpeakTime = DateTime.now();
-          setState(() => _isSpeaking = true);
           await _tts.speak(result.spokenText);
           if (mounted) setState(() => _isSpeaking = false);
         }
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _status = 'Error: $e');
-    } finally {
-      if (mounted) setState(() => _recognizing = false);
+      setState(() { _status = 'Error: $e'; _recognizing = false; });
     }
   }
 
@@ -196,7 +197,7 @@ class _ObjectRecognitionScreenState extends State<ObjectRecognitionScreen>
       CameraPreview(_cam!),
       if (_last != null && _last!.objects.isNotEmpty)
         Positioned.fill(child: CustomPaint(painter: _BBoxPainter(objects: _last!.objects))),
-      if (_scanning) _ScanBorder(),
+      if (_scanning) const _ScanBorder(),
       if (_recognizing) Positioned(bottom: 14, left: 0, right: 0,
         child: Center(child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -302,6 +303,7 @@ class _BBoxPainter extends CustomPainter {
 }
 
 class _ScanBorder extends StatefulWidget {
+  const _ScanBorder();
   @override State<_ScanBorder> createState() => _ScanBorderState();
 }
 class _ScanBorderState extends State<_ScanBorder> with SingleTickerProviderStateMixin {

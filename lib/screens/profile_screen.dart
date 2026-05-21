@@ -15,6 +15,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final uid = FirebaseAuth.instance.currentUser?.uid;
   late Future<DocumentSnapshot<Map<String, dynamic>>> _userDoc;
+  Map<String, dynamic>? _cachedData;
 
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
@@ -35,6 +36,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _userDoc.then((doc) {
         final data = doc.data();
         if (data != null) {
+          _cachedData = data;
           _nameCtrl.text = (data['name'] ?? '').toString();
           _ageCtrl.text = (data['age'] ?? '').toString();
           _phoneCtrl.text = (data['phone'] ?? '').toString();
@@ -73,7 +75,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated')));
       setState(() => _editing = false);
       // refresh
-      setState(() => _userDoc = FirebaseFirestore.instance.collection('users').doc(uid).get());
+      setState(() {
+        _cachedData = data;
+        _userDoc = FirebaseFirestore.instance.collection('users').doc(uid).get();
+      });
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e')));
     } finally {
@@ -408,39 +413,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               onPressed: _loading
                                                   ? null
                                                   : () {
-                                                      setState(() =>
-                                                          _editing = false);
-                                                      // restore values from snapshot
-                                                      setState(() => _userDoc =
-                                                          FirebaseFirestore
-                                                              .instance
-                                                              .collection(
-                                                                  'users')
-                                                              .doc(uid)
-                                                              .get());
-                                                      _userDoc.then((doc) {
-                                                        final d = doc.data();
-                                                        if (d != null) {
-                                                          _nameCtrl.text =
-                                                              (d['name'] ?? '')
-                                                                  .toString();
-                                                          _ageCtrl.text =
-                                                              (d['age'] ?? '')
-                                                                  .toString();
-                                                          _phoneCtrl.text =
-                                                              (d['phone'] ?? '')
-                                                                  .toString();
-                                                          _emergencyCtrl.text =
-                                                              (d['emergencyPhone'] ??
-                                                                      '')
-                                                                  .toString();
-                                                          setState(() {
-                                                            _preferredLanguage =
-                                                                (d['preferredLanguage'] ?? 'English')
-                                                                    .toString();
-                                                          });
-                                                        }
-                                                      });
+                                                      setState(() => _editing = false);
+                                                      // Restore from cache instead of re-fetching
+                                                      final d = _cachedData;
+                                                      if (d != null) {
+                                                        _nameCtrl.text = (d['name'] ?? '').toString();
+                                                        _ageCtrl.text = (d['age'] ?? '').toString();
+                                                        _phoneCtrl.text = (d['phone'] ?? '').toString();
+                                                        _emergencyCtrl.text = (d['emergencyPhone'] ?? '').toString();
+                                                        setState(() {
+                                                          _preferredLanguage = (d['preferredLanguage'] ?? 'English').toString();
+                                                        });
+                                                      }
                                                     },
                                               child: Text('Cancel',
                                                   style: GoogleFonts.inter(

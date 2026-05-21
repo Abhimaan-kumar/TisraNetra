@@ -53,7 +53,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _volumeService.dispose();
-    _ttsService.dispose();
+    _ttsService.stop();
     super.dispose();
   }
 

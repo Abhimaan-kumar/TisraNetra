@@ -1,6 +1,6 @@
 {
-  "name": "lifelens-functions",
-  "description": "Cloud Functions for LifeLens",
+  "name": "percive-functions",
+  "description": "Cloud Functions for Percive",
   "main": "index.js",
   "engines": {
     "node": "22"

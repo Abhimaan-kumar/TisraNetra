@@ -1,6 +1,6 @@
-# lifelens
+# Tisra Netra
 
-A voice controlled multi platform application for visually challenge person
+A voice controlled multi platform application for visually challenged person (formerly LifeLens)
 
 
 ## Help

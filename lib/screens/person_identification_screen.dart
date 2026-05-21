@@ -26,6 +26,7 @@ import '../services/face_db_service.dart';
 import '../services/face_embedding_service.dart';
 import '../services/tts_service.dart';
 import '../widgets/volume_button_mixin.dart';
+import '../utils/image_utils.dart';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -78,10 +79,10 @@ class _PersonIdentificationScreenState
   int _frameCount = 0;
 
   // ── Detection results ─────────────────────────────────────────────────────
-  List<Face> _faces = [];
-  String _identifiedName = '';
-  double _confidence = 0.0;
-  Size _imageSize = Size.zero;
+  final ValueNotifier<List<Face>> _facesN = ValueNotifier([]);
+  final ValueNotifier<String> _identifiedNameN = ValueNotifier('');
+  final ValueNotifier<double> _confidenceN = ValueNotifier(0.0);
+  final ValueNotifier<Size> _imageSizeN = ValueNotifier(Size.zero);
 
   // ── TTS debounce ──────────────────────────────────────────────────────────
   String _lastSpokenName = '';
@@ -97,7 +98,7 @@ class _PersonIdentificationScreenState
   List<List<double>> _capturedEmbeddings = [];
 
   // ── Status ────────────────────────────────────────────────────────────────
-  String _status = 'Initializing…';
+  final ValueNotifier<String> _statusN = ValueNotifier('Initializing…');
   bool _initialized = false;
   String _initError = '';
 
@@ -133,7 +134,12 @@ class _PersonIdentificationScreenState
     _cam?.dispose();
     _faceDetector.close();
     _embeddingService.dispose();
-    _tts.dispose();
+    _tts.stop();
+    _facesN.dispose();
+    _identifiedNameN.dispose();
+    _confidenceN.dispose();
+    _imageSizeN.dispose();
+    _statusN.dispose();
     super.dispose();
   }
 
@@ -164,8 +170,8 @@ class _PersonIdentificationScreenState
       if (!mounted) return;
       setState(() {
         _initialized = true;
-        _status = 'Ready';
       });
+      _statusN.value = 'Ready';
       _tts.speakLocalized(
         'Person identification ready. Point the camera at a person.',
         'व्यक्ति पहचान तैयार है। कैमरा किसी व्यक्ति की ओर करें।',
@@ -175,7 +181,7 @@ class _PersonIdentificationScreenState
       if (mounted) {
         setState(() {
           _initError = e.toString();
-          _status = 'Initialisation failed';
+          _statusN.value = 'Initialisation failed';
         });
       }
       _tts.speakLocalized('Failed to initialise. Please restart the screen.', 'आरंभ करने में विफल। कृपया स्क्रीन को फिर से चालू करें।');
@@ -190,7 +196,7 @@ class _PersonIdentificationScreenState
   Future<void> _initCamera() async {
     _cameras = await availableCameras();
     if (_cameras.isEmpty) {
-      setState(() => _status = 'No camera available');
+      if (mounted) _statusN.value = 'No camera available';
       return;
     }
 
@@ -228,54 +234,44 @@ class _PersonIdentificationScreenState
 
   Future<void> _processImage(CameraImage image) async {
     try {
-      // ── Synchronous: touch camera data BEFORE any await ──────────────────
-
       // 1. Build InputImage for ML Kit (copies bytes via WriteBuffer)
-      final inputImage = _buildInputImage(image);
+      final inputImage = await _buildInputImage(image);
 
-      // 2. Convert YUV→RGB (synchronous, uses native camera buffer)
-      final rgbImage = _embeddingService.convertCameraImage(image);
-
-      // ── Async: camera data no longer needed after this point ─────────────
-
-      // 3. Rotate to match ML Kit bbox coordinate system
-      final rotatedImage =
-          _embeddingService.rotateImage(rgbImage, _sensorOrientation);
-
-      // 4. Face detection (runs on native thread)
+      // 2. Face detection (runs on native thread)
       final faces = await _faceDetector.processImage(inputImage);
       if (!mounted) return;
 
-      // 5. Effective image size (post-rotation, for overlay scaling)
+      // 3. Effective image size (post-rotation, for overlay scaling)
       final effectiveSize =
           (_sensorOrientation == 90 || _sensorOrientation == 270)
               ? Size(image.height.toDouble(), image.width.toDouble())
               : Size(image.width.toDouble(), image.height.toDouble());
 
       if (faces.isEmpty) {
-        setState(() {
-          _faces = [];
-          _identifiedName = '';
-          _confidence = 0.0;
-          _imageSize = effectiveSize;
-          _status = _isSaving
-              ? '${_kPoses[_saveStep].$2} — waiting for face…'
-              : 'No face detected';
-        });
+        _facesN.value = [];
+        _identifiedNameN.value = '';
+        _confidenceN.value = 0.0;
+        _imageSizeN.value = effectiveSize;
+        _statusN.value = _isSaving
+            ? '${_kPoses[_saveStep].$2} — waiting for face…'
+            : 'No face detected';
         return;
       }
 
-      // 6. Use the first (largest) detected face
+      // 4. Use the first (largest) detected face
       final face = faces.first;
 
-      // 7. Crop face region from rotated RGB image
-      final faceImage =
-          _embeddingService.cropFace(rotatedImage, face.boundingBox);
+      // 5. Convert, rotate, and crop face region in a background isolate
+      final faceImage = await processCameraImageIsolate(
+        image: image,
+        sensorOrientation: _sensorOrientation,
+        cropRect: face.boundingBox,
+      );
 
-      // 8. Run MobileFaceNet → 192-d embedding
+      // 6. Run MobileFaceNet → 192-d embedding
       final embedding = _embeddingService.getEmbedding(faceImage);
 
-      // 9. Route to save or identify
+      // 7. Route to save or identify
       if (_isSaving && _saveStep >= 0 && _saveStep < _kPoses.length) {
         _captureForSave(embedding, faces, effectiveSize);
       } else {
@@ -283,7 +279,7 @@ class _PersonIdentificationScreenState
       }
     } catch (e) {
       debugPrint('[PersonID] Processing error: $e');
-      if (mounted) setState(() => _status = 'Processing error');
+      if (mounted) _statusN.value = 'Processing error';
     } finally {
       _isProcessing = false;
     }
@@ -292,65 +288,8 @@ class _PersonIdentificationScreenState
   /// Build a proper NV21 InputImage from a YUV_420_888 camera frame.
   ///
   /// NV21 layout: all Y bytes first, then interleaved V,U bytes.
-  InputImage _buildInputImage(CameraImage image) {
-    final yPlane = image.planes[0];
-    final uPlane = image.planes[1];
-    final vPlane = image.planes[2];
-
-    final int width = image.width;
-    final int height = image.height;
-    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    late final Uint8List nv21;
-
-    if (uvPixelStride == 2) {
-      // Fast path: UV planes are already interleaved
-      final int yRowBytes = width;
-      final int totalYBytes = yRowBytes * height;
-      final int totalUVBytes = vPlane.bytes.length;
-
-      nv21 = Uint8List(totalYBytes + totalUVBytes);
-
-      // Copy Y plane
-      if (yPlane.bytesPerRow == width) {
-        nv21.setRange(0, totalYBytes, yPlane.bytes);
-      } else {
-        int dst = 0;
-        for (int row = 0; row < height; row++) {
-          final int src = row * yPlane.bytesPerRow;
-          nv21.setRange(dst, dst + width, yPlane.bytes, src);
-          dst += width;
-        }
-      }
-      // Copy VU interleaved
-      nv21.setRange(totalYBytes, totalYBytes + totalUVBytes, vPlane.bytes);
-    } else {
-      // Slow path: UV planes are planar
-      final int uvWidth = width ~/ 2;
-      final int uvHeight = height ~/ 2;
-      final int ySize = width * height;
-
-      nv21 = Uint8List(ySize + uvWidth * uvHeight * 2);
-
-      // Copy Y plane
-      int pos = 0;
-      for (int row = 0; row < height; row++) {
-        final int offset = row * yPlane.bytesPerRow;
-        for (int col = 0; col < width; col++) {
-          nv21[pos++] = yPlane.bytes[offset + col];
-        }
-      }
-
-      // Interleave V, U
-      for (int row = 0; row < uvHeight; row++) {
-        for (int col = 0; col < uvWidth; col++) {
-          final int vi = row * vPlane.bytesPerRow + col;
-          final int ui = row * uPlane.bytesPerRow + col;
-          nv21[pos++] = vPlane.bytes[vi];
-          nv21[pos++] = uPlane.bytes[ui];
-        }
-      }
-    }
+  Future<InputImage> _buildInputImage(CameraImage image) async {
+    final nv21 = await convertToNV21(image);
 
     final rotation = switch (_sensorOrientation) {
       0 => InputImageRotation.rotation0deg,
@@ -363,10 +302,10 @@ class _PersonIdentificationScreenState
     return InputImage.fromBytes(
       bytes: nv21,
       metadata: InputImageMetadata(
-        size: Size(width.toDouble(), height.toDouble()),
+        size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: rotation,
         format: InputImageFormat.nv21,
-        bytesPerRow: width,
+        bytesPerRow: image.width,
       ),
     );
   }
@@ -410,16 +349,14 @@ class _PersonIdentificationScreenState
       }
     }
 
-    setState(() {
-      _faces = faces;
-      _imageSize = imageSize;
-      _identifiedName = bestName;
-      _confidence = bestSim;
-      _status = bestName == 'Unknown'
-          ? 'Unknown person detected'
-          : 'Identified: $bestName '
-              '(${(bestSim * 100).toStringAsFixed(1)}%)';
-    });
+    _facesN.value = faces;
+    _imageSizeN.value = imageSize;
+    _identifiedNameN.value = bestName;
+    _confidenceN.value = bestSim;
+    _statusN.value = bestName == 'Unknown'
+        ? 'Unknown person detected'
+        : 'Identified: $bestName '
+            '(${(bestSim * 100).toStringAsFixed(1)}%)';
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -432,8 +369,8 @@ class _PersonIdentificationScreenState
       _saveStep = 0;
       _capturedEmbeddings = [];
       _capturingPose = true; // block capture until TTS finishes
-      _status = _kPoses[0].$2;
     });
+    _statusN.value = _kPoses[0].$2;
 
     await _tts.speakLocalized(
       'Starting face enrollment. Ask the person to '
@@ -448,10 +385,8 @@ class _PersonIdentificationScreenState
   void _captureForSave(
       List<double> embedding, List<Face> faces, Size imageSize) {
     // Update overlay
-    setState(() {
-      _faces = faces;
-      _imageSize = imageSize;
-    });
+    _facesN.value = faces;
+    _imageSizeN.value = imageSize;
 
     if (_capturingPose) return; // still in transition delay
     _capturingPose = true;
@@ -463,7 +398,7 @@ class _PersonIdentificationScreenState
   Future<void> _advanceSaveStep() async {
     if (_saveStep < _kPoses.length - 1) {
       // Show "Captured ✓" briefly
-      setState(() => _status = '${_kPoses[_saveStep].$1} captured ✓');
+      _statusN.value = '${_kPoses[_saveStep].$1} captured ✓';
       await _tts.speakLocalized('Captured.', 'कैप्चर हो गया।');
       await Future.delayed(const Duration(milliseconds: 1200));
       if (!mounted) return;
@@ -471,8 +406,8 @@ class _PersonIdentificationScreenState
       // Move to next pose
       setState(() {
         _saveStep++;
-        _status = _kPoses[_saveStep].$2;
       });
+      _statusN.value = _kPoses[_saveStep].$2;
       await _tts.speakLocalized(
         'Now ${_kPoses[_saveStep].$2.toLowerCase()}.',
         'अब ${_saveStep == 1 ? "चेहरा बाईं ओर घुमाएं" : _saveStep == 2 ? "चेहरा दाईं ओर घुमाएं" : _saveStep == 3 ? "सिर थोड़ा ऊपर करें" : "सिर थोड़ा नीचे करें"}।',
@@ -481,7 +416,7 @@ class _PersonIdentificationScreenState
       if (mounted) _capturingPose = false; // allow next capture
     } else {
       // All 5 poses captured
-      setState(() => _status = 'All views captured!');
+      _statusN.value = 'All views captured!';
       await _tts.speakLocalized('All views captured. Please enter the person\'s name.', 'सभी दृश्य कैप्चर हो गए। कृपया व्यक्ति का नाम दर्ज करें।');
       if (mounted) _showNameDialog();
     }
@@ -493,8 +428,8 @@ class _PersonIdentificationScreenState
       _saveStep = -1;
       _capturedEmbeddings = [];
       _capturingPose = true;
-      _status = 'Save cancelled';
     });
+    _statusN.value = 'Save cancelled';
     _tts.speakLocalized('Face enrollment cancelled.', 'चेहरा पंजीकरण रद्द कर दिया गया।');
   }
 
@@ -507,9 +442,9 @@ class _PersonIdentificationScreenState
       _saveStep = -1;
       _capturedEmbeddings = [];
       _capturingPose = true;
-      _status = '$name saved successfully!';
       _lastSpokenName = ''; // reset so next identification speaks
     });
+    _statusN.value = '$name saved successfully!';
     _tts.speakLocalized('$name has been saved. You can now identify them.', '$name को सेव कर लिया गया है। अब आप उन्हें पहचान सकते हैं।');
   }
 
@@ -522,8 +457,8 @@ class _PersonIdentificationScreenState
     // Default action when no voice command: toggle save or repeat name
     if (_isSaving) {
       _cancelSave();
-    } else if (_identifiedName.isNotEmpty && _identifiedName != 'Unknown') {
-      await _tts.speakLocalized('This is $_identifiedName.', 'यह $_identifiedName है।');
+    } else if (_identifiedNameN.value.isNotEmpty && _identifiedNameN.value != 'Unknown') {
+      await _tts.speakLocalized('This is ${_identifiedNameN.value}.', 'यह ${_identifiedNameN.value} है।');
     } else {
       await _tts.speakLocalized('Unknown person. Say "save" to save this face.', 'अनजान व्यक्ति। इस चेहरे को सेव करने के लिए "सेव" बोलें।');
     }
@@ -538,9 +473,9 @@ class _PersonIdentificationScreenState
         cmd.contains('store')) {
       if (_isSaving) {
         await _tts.speakLocalized('Already saving a face.', 'पहले से सेव हो रहा है।');
-      } else if (_identifiedName == 'Unknown' && _faces.isNotEmpty) {
+      } else if (_identifiedNameN.value == 'Unknown' && _facesN.value.isNotEmpty) {
         _startSaveFlow();
-      } else if (_faces.isEmpty) {
+      } else if (_facesN.value.isEmpty) {
         await _tts.speakLocalized('No face detected to save.', 'कोई चेहरा नहीं मिला।');
       } else {
         await _tts.speakLocalized('This person is already identified.', 'यह व्यक्ति पहले से पहचाना गया है।');
@@ -550,8 +485,8 @@ class _PersonIdentificationScreenState
     } else if (cmd.contains('who') ||
         cmd.contains('kaun') ||
         cmd.contains('name')) {
-      if (_identifiedName.isNotEmpty && _identifiedName != 'Unknown') {
-        await _tts.speakLocalized('This is $_identifiedName.', 'यह $_identifiedName है।');
+      if (_identifiedNameN.value.isNotEmpty && _identifiedNameN.value != 'Unknown') {
+        await _tts.speakLocalized('This is ${_identifiedNameN.value}.', 'यह ${_identifiedNameN.value} है।');
       } else {
         await _tts.speakLocalized('Unknown person.', 'अनजान व्यक्ति।');
       }
@@ -848,18 +783,25 @@ class _PersonIdentificationScreenState
         CameraPreview(_cam!),
 
         // Face bounding box overlay
-        if (_faces.isNotEmpty && _imageSize != Size.zero)
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _FaceOverlayPainter(
-                faces: _faces,
-                imageSize: _imageSize,
-                name: _identifiedName,
-                confidence: _confidence,
-                isSaving: _isSaving,
-              ),
-            ),
+        Positioned.fill(
+          child: ListenableBuilder(
+            listenable: Listenable.merge([_facesN, _imageSizeN, _identifiedNameN, _confidenceN]),
+            builder: (context, _) {
+              if (_facesN.value.isEmpty || _imageSizeN.value == Size.zero) {
+                return const SizedBox.shrink();
+              }
+              return CustomPaint(
+                painter: _FaceOverlayPainter(
+                  faces: _facesN.value,
+                  imageSize: _imageSizeN.value,
+                  name: _identifiedNameN.value,
+                  confidence: _confidenceN.value,
+                  isSaving: _isSaving,
+                ),
+              );
+            },
           ),
+        ),
 
         // Save-mode instruction card
         if (_isSaving && _saveStep >= 0)
@@ -899,12 +841,20 @@ class _PersonIdentificationScreenState
           ),
 
         // Identified name overlay at the bottom of the camera preview
-        if (_identifiedName.isNotEmpty && _faces.isNotEmpty && !_isSaving)
+        if (!_isSaving)
           Positioned(
             bottom: 12,
             left: 20,
             right: 20,
-            child: _buildNameOverlay(),
+            child: ListenableBuilder(
+              listenable: Listenable.merge([_identifiedNameN, _facesN]),
+              builder: (context, _) {
+                if (_identifiedNameN.value.isEmpty || _facesN.value.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return _buildNameOverlay();
+              },
+            ),
           ),
       ],
     );
@@ -976,7 +926,9 @@ class _PersonIdentificationScreenState
   // ── Name overlay ──────────────────────────────────────────────────────────
 
   Widget _buildNameOverlay() {
-    final isKnown = _identifiedName != 'Unknown';
+    final identifiedName = _identifiedNameN.value;
+    final confidence = _confidenceN.value;
+    final isKnown = identifiedName != 'Unknown';
     final color = isKnown ? _kGreen : _kRed;
 
     return Container(
@@ -1003,7 +955,7 @@ class _PersonIdentificationScreenState
           Flexible(
             child: Text(
               isKnown
-                  ? '$_identifiedName  •  ${(_confidence * 100).toStringAsFixed(1)}%'
+                  ? '$identifiedName  •  ${(confidence * 100).toStringAsFixed(1)}%'
                   : 'Unknown Person',
               style: GoogleFonts.inter(
                 color: Colors.white,
@@ -1027,21 +979,26 @@ class _PersonIdentificationScreenState
         mainAxisSize: MainAxisSize.min,
         children: [
           // Status bar
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: _kSurface,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _kCardBorder),
-            ),
-            child: Text(
-              _status,
-              style: GoogleFonts.inter(
-                color: _isSaving ? _kGold : Colors.white70,
-                fontSize: 12,
-              ),
-            ),
+          ValueListenableBuilder<String>(
+            valueListenable: _statusN,
+            builder: (context, status, _) {
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: _kSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _kCardBorder),
+                ),
+                child: Text(
+                  status,
+                  style: GoogleFonts.inter(
+                    color: _isSaving ? _kGold : Colors.white70,
+                    fontSize: 12,
+                  ),
+                ),
+              );
+            },
           ),
           const SizedBox(height: 12),
 
@@ -1072,68 +1029,74 @@ class _PersonIdentificationScreenState
               ),
             ),
           ] else ...[
-            Row(
-              children: [
-                // Speak name button
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      if (_identifiedName.isNotEmpty &&
-                          _identifiedName != 'Unknown') {
-                        _tts.speakLocalized('This is $_identifiedName.', 'यह $_identifiedName है।');
-                      } else {
-                        _tts.speakLocalized('Unknown person.', 'अनजान व्यक्ति।');
-                      }
-                    },
-                    icon: const Icon(Icons.volume_up, size: 20),
-                    label: Text(
-                      'Speak',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+            ListenableBuilder(
+              listenable: Listenable.merge([_identifiedNameN, _facesN]),
+              builder: (context, _) {
+                final identifiedName = _identifiedNameN.value;
+                final hasFaces = _facesN.value.isNotEmpty;
+                return Row(
+                  children: [
+                    // Speak name button
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          if (identifiedName.isNotEmpty &&
+                              identifiedName != 'Unknown') {
+                            _tts.speakLocalized('This is $identifiedName.', 'यह $identifiedName है।');
+                          } else {
+                            _tts.speakLocalized('Unknown person.', 'अनजान व्यक्ति।');
+                          }
+                        },
+                        icon: const Icon(Icons.volume_up, size: 20),
+                        label: Text(
+                          'Speak',
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _kSurface,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            side: const BorderSide(color: _kCardBorder),
+                          ),
+                        ),
                       ),
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _kSurface,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        side: const BorderSide(color: _kCardBorder),
+                    const SizedBox(width: 10),
+                    // Save face button
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        onPressed: (identifiedName == 'Unknown' && hasFaces)
+                            ? _startSaveFlow
+                            : null,
+                        icon: const Icon(Icons.person_add_alt_1, size: 22),
+                        label: Text(
+                          'Save Face',
+                          style: GoogleFonts.inter(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _kGold,
+                          foregroundColor: Colors.black,
+                          disabledBackgroundColor: Colors.grey[800],
+                          disabledForegroundColor: Colors.grey[600],
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // Save face button
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton.icon(
-                    onPressed: (_identifiedName == 'Unknown' &&
-                            _faces.isNotEmpty)
-                        ? _startSaveFlow
-                        : null,
-                    icon: const Icon(Icons.person_add_alt_1, size: 22),
-                    label: Text(
-                      'Save Face',
-                      style: GoogleFonts.inter(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _kGold,
-                      foregroundColor: Colors.black,
-                      disabledBackgroundColor: Colors.grey[800],
-                      disabledForegroundColor: Colors.grey[600],
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+                  ],
+                );
+              },
             ),
           ],
         ],

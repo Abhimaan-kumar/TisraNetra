@@ -1,34 +1,15 @@
 // lib/screens/currency_screen.dart
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 import '../services/currency_service.dart';
 import '../services/tts_service.dart';
+import '../utils/image_utils.dart';
 import '../widgets/volume_button_mixin.dart';
 
-double _laplacianVariance(Uint8List jpegBytes) {
-  try {
-    final decoded = img.decodeImage(jpegBytes);
-    if (decoded == null) return 0;
-    final small = img.copyResize(decoded, width: 200);
-    final w = small.width; final h = small.height;
-    final gray = List.generate(h, (y) => List.generate(w, (x) {
-      final p = small.getPixel(x, y);
-      return (p.r * 0.299 + p.g * 0.587 + p.b * 0.114).toDouble();
-    }));
-    const kernel = [[0,1,0],[1,-4,1],[0,1,0]];
-    double sumSq = 0; int count = 0;
-    for (int y = 1; y < h-1; y++) for (int x = 1; x < w-1; x++) {
-      double v = 0;
-      for (int ky = 0; ky < 3; ky++) for (int kx = 0; kx < 3; kx++)
-        v += kernel[ky][kx] * gray[y+ky-1][x+kx-1];
-      sumSq += v*v; count++;
-    }
-    return count == 0 ? 0 : sumSq / count;
-  } catch (_) { return 0; }
-}
+// Sharpness (Laplacian variance) is now computed in a background isolate.
+// See lib/utils/image_utils.dart
+
 
 class CurrencyScreen extends StatefulWidget {
   const CurrencyScreen({super.key});
@@ -79,7 +60,7 @@ class _CurrencyScreenState extends State<CurrencyScreen>
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _cam?.dispose();
-    _tts.dispose();
+    _tts.stop();
     super.dispose();
   }
 
@@ -193,7 +174,7 @@ class _CurrencyScreenState extends State<CurrencyScreen>
       _detecting = true;
       final photo = await _cam!.takePicture();
       final bytes = await photo.readAsBytes();
-      final sharp = await Future.microtask(() => _laplacianVariance(bytes));
+      final sharp = await computeLaplacianVariance(bytes);
       
       if (!mounted) return;
       

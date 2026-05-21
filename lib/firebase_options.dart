@@ -71,6 +71,6 @@ class DefaultFirebaseOptions {
     projectId: 'lifelens-5bbd7',
     storageBucket: 'lifelens-5bbd7.firebasestorage.app',
     iosClientId: '1010017474459-9gnonm0l38of51al7s7cq2974tp6l770.apps.googleusercontent.com',
-    iosBundleId: 'com.example.lifelens',
+    iosBundleId: 'com.example.percive',
   );
 }

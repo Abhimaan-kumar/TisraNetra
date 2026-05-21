@@ -9,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:1010017474459:android:900bd2d1bb92e75a86733e",
         "android_client_info": {
-          "package_name": "com.lifelens.app"
+          "package_name": "com.percive.app"
         }
       },
       "oauth_client": [
@@ -34,7 +34,7 @@
               "client_id": "1010017474459-9gnonm0l38of51al7s7cq2974tp6l770.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.lifelens"
+                "bundle_id": "com.example.percive"
               }
             }
           ]

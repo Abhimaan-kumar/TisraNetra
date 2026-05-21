@@ -5,6 +5,7 @@
 // Respects the user's preferred language (English / Hindi) stored in
 // LanguagePreferenceService.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'language_preference_service.dart';
@@ -12,6 +13,10 @@ import 'path_analyzer_service.dart' show VoiceUrgency;
 import 'read_anything_service.dart' show TextScript, TextSegment;
 
 class TtsService {
+  // ── Singleton ──────────────────────────────────────────────────────────────
+  static final TtsService _instance = TtsService._internal();
+  factory TtsService() => _instance;
+
   final FlutterTts _tts = FlutterTts();
 
   // ── Default speech parameters ─────────────────────────────────────────────
@@ -22,7 +27,7 @@ class TtsService {
   /// Returns the TTS language code based on the user's stored preference.
   String get _preferredLang => LanguagePreferenceService().preferredLanguage;
 
-  TtsService() {
+  TtsService._internal() {
     _tts.setLanguage(_preferredLang);
     _tts.setSpeechRate(_defaultRate);
     _tts.setVolume(_defaultVolume);
@@ -116,9 +121,25 @@ class TtsService {
     await _tts.setLanguage(_preferredLang);
   }
 
+  /// Register a callback invoked when the current utterance finishes.
+  /// Useful for auto-resuming voice input after AI responses.
+  void setCompletionHandler(VoidCallback handler) {
+    _tts.setCompletionHandler(handler);
+  }
+
+  /// Remove any previously registered completion handler.
+  void clearCompletionHandler() {
+    _tts.setCompletionHandler(() {});
+  }
+
   Future<void> stop() async => await _tts.stop();
 
-  void dispose() => _tts.stop();
+  /// Singleton — do NOT dispose the shared engine from individual screens.
+  /// Use [stop] instead to cancel current speech.
+  void dispose() {
+    // No-op: singleton lifecycle is managed by the app, not individual screens.
+    // Screens should call stop() in their own dispose() methods.
+  }
 
   // ── Internal helpers ──────────────────────────────────────────────────────
 

@@ -42,7 +42,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Tisra Netra')),
       );
 
     } on FirebaseAuthException catch (e) {

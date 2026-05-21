@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:google_fonts/google_fonts.dart';
 import '../services/tts_service.dart';
@@ -22,10 +21,9 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
     with WidgetsBindingObserver {
   late GenerativeModel _model;
   late ChatSession _chatSession;
-  late FlutterTts _tts;
   late stt.SpeechToText _speech;
   final VolumeButtonService _volumeService = VolumeButtonService();
-  final TtsService _ttsService = TtsService();
+  final TtsService _tts = TtsService();
 
   final List<Message> _messages = [];
   final _textController = TextEditingController();
@@ -66,8 +64,8 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
   void _initializeGemini() {
   const String apiKey = 'REDACTED_PRIVATE_API_KEY';
 
-  const String systemPrompt = '''
-You are a helpful personal buddy named Life Lens that will be used by blinds people.
+   const String systemPrompt = '''
+You are a helpful personal buddy named Tisra Netra that will be used by blinds people.
 
 Your personality:
 - Friendly and concise
@@ -106,20 +104,18 @@ Rules:
     ],
   );
 
-  // ✅ Optional: seed the chat with a pre-conversation for extra context
   _chatSession = _model.startChat(
     history: [
       Content.model([
-        TextPart("Hello! I'm Life Lens, your personal assistant. How can I help you today?")
+        TextPart("Hello! I'm Tisra Netra, your personal assistant. How can I help you today?")
       ]),
     ],
   );
 }
 
   void _initializeTTS() {
-    _tts = FlutterTts();
-    _tts.setLanguage("en-US");
-    _tts.setSpeechRate(0.5);
+    // TtsService is a singleton — no separate FlutterTts engine needed.
+    // After each AI response finishes speaking, resume listening.
     _tts.setCompletionHandler(() {
       if (mounted) {
         _startListening();
@@ -174,7 +170,7 @@ Rules:
     _volumeService.initialize(
       onVolumeUp: _handleVolumeUp,
       onVolumeDown: () async {
-        await _ttsService.speakLocalized('Going back to home', 'होम पर वापस जा रहे हैं');
+        await _tts.speakLocalized('Going back to home', 'होम पर वापस जा रहे हैं');
         if (mounted) Navigator.pop(context);
       },
     );
@@ -194,7 +190,7 @@ Rules:
       _listening = true;
       _recognizedText = '';
     });
-    await _ttsService.speakLocalized('Listening...', 'सुन रहा हूँ...');
+    await _tts.speakLocalized('Listening...', 'सुन रहा हूँ...');
 
     await _speech.listen(
       onResult: (result) {
@@ -262,7 +258,6 @@ Rules:
     _speech.stop();
     _tts.stop();
     _volumeService.dispose();
-    _ttsService.dispose();
     super.dispose();
   }
 
@@ -434,6 +429,7 @@ Rules:
                         )
                       : ListView.builder(
                           controller: _scrollController,
+                          cacheExtent: 1000,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 8),
                           itemCount: _messages.length,

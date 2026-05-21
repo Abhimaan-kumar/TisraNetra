@@ -1,5 +1,5 @@
 /**
- * Cloud Functions for LifeLens
+ * Cloud Functions for Percive
  *
  * Trigger: when a new document is created in `help_requests`,
  * send an FCM push notification to every Volunteer user.

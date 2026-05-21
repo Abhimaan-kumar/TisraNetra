@@ -46,7 +46,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     if (user == null) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Life Lens")),
+        MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Tisra Netra")),
       );
       return;
     }
@@ -71,7 +71,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     } catch (e) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Life Lens')),
+        MaterialPageRoute(builder: (_) => const HomeScreen(title: 'Tisra Netra')),
       );
     }
   }

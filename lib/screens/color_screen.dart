@@ -53,7 +53,7 @@ class _ColorScreenState extends State<ColorScreen>
     WidgetsBinding.instance.removeObserver(this);
     _keepScanning = false;
     _cam?.dispose();
-    _tts.dispose();
+    _tts.stop();
     super.dispose();
   }
 
@@ -151,27 +151,32 @@ class _ColorScreenState extends State<ColorScreen>
       if (!mounted) return;
       
       if (result != null) {
+        final timeSinceSpeak = DateTime.now().difference(_lastSpeakTime).inMilliseconds;
+        final isNew = _prev == null || _prev!.dominantColor != result.dominantColor;
+        final shouldSpeak = timeSinceSpeak > 3000 || (isNew && timeSinceSpeak > 1500);
+
+        // Single batched setState for detection result
         setState(() {
           _last = result;
           _status = 'Color: ${result.description}';
+          _identifying = false;
+          if (shouldSpeak) _isSpeaking = true;
         });
 
-        final timeSinceSpeak = DateTime.now().difference(_lastSpeakTime).inMilliseconds;
-        final isNew = _prev == null || _prev!.dominantColor != result.dominantColor;
-
-        if (timeSinceSpeak > 3000 || (isNew && timeSinceSpeak > 1500)) {
+        if (shouldSpeak) {
           _prev = result;
           _lastSpeakTime = DateTime.now();
-          setState(() => _isSpeaking = true);
           await _tts.speak(result.description);
           if (mounted) setState(() => _isSpeaking = false);
         }
+        return; // skip the finally setState since we already reset _identifying
       }
     } catch (e) {
-      if (mounted) setState(() => _status = 'Error: $e');
-    } finally {
-      if (mounted) setState(() => _identifying = false);
+      if (mounted) setState(() { _status = 'Error: $e'; _identifying = false; });
+      return;
     }
+    // No result case — reset identifying flag
+    if (mounted) setState(() => _identifying = false);
   }
 
   @override

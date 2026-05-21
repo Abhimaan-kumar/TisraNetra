@@ -1,4 +1,4 @@
-package com.lifelens.app
+package com.percive.app
 
 import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
@@ -6,7 +6,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.lifelens.app/volumebutton"
+    private val CHANNEL = "com.percive.app/volumebutton"
     private lateinit var volumeButtonChannel: MethodChannel
     
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

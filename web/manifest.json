@@ -1,11 +1,11 @@
 {
-    "name": "lifelens",
-    "short_name": "lifelens",
+    "name": "Tisra Netra",
+    "short_name": "Tisra Netra",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Tisra Netra - An accessible AI-powered app for vision impairment assistance with voice commands, screen reading, and navigation features.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -15,6 +15,7 @@ import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'depth_estimation_service.dart';
+import '../utils/image_utils.dart';
 
 // ─── Danger level for navigation alerts ──────────────────────────────────────
 
@@ -148,18 +149,17 @@ class NavObjectDetectionService {
 
   /// Run detection on a camera frame. Returns sorted by danger level then
   /// proximity (closer objects first).
-  List<NavDetectedObject> detect(CameraImage cameraImage, int sensorOrientation) {
+  Future<List<NavDetectedObject>> detect(CameraImage cameraImage, int sensorOrientation) async {
     if (!_isInitialized || _interpreter == null) return [];
 
     try {
-      // 1. Convert YUV420 → RGB
-      final rgbImage = _convertCameraImage(cameraImage);
-
-      // 2. Rotate to upright orientation
-      final rotated = _rotateImage(rgbImage, sensorOrientation);
-
-      // 3. Resize to 300×300
-      final resized = img.copyResize(rotated, width: _inputSize, height: _inputSize);
+      // 1-3. Convert YUV420 → RGB, rotate, and resize to 300x300 in a background isolate
+      final resized = await processCameraImageIsolate(
+        image: cameraImage,
+        sensorOrientation: sensorOrientation,
+        resizeWidth: _inputSize,
+        resizeHeight: _inputSize,
+      );
 
       // 4. Build input tensor [1, 300, 300, 3] as uint8
       final input = _buildInputTensor(resized);
@@ -248,48 +248,7 @@ class NavObjectDetectionService {
     }
   }
 
-  // ── Image conversion helpers ──────────────────────────────────────────────
 
-  /// Convert YUV420 CameraImage → RGB img.Image
-  img.Image _convertCameraImage(CameraImage camera) {
-    final int w = camera.width;
-    final int h = camera.height;
-    final yPlane = camera.planes[0];
-    final uPlane = camera.planes[1];
-    final vPlane = camera.planes[2];
-    final int uvRowStride = uPlane.bytesPerRow;
-    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    final image = img.Image(width: w, height: h);
-
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        final int yIndex = y * yPlane.bytesPerRow + x;
-        final int uvIndex = uvPixelStride * (x ~/ 2) + uvRowStride * (y ~/ 2);
-
-        final int yVal = yPlane.bytes[yIndex];
-        final int uVal =
-            uvIndex < uPlane.bytes.length ? uPlane.bytes[uvIndex] : 128;
-        final int vVal =
-            uvIndex < vPlane.bytes.length ? vPlane.bytes[uvIndex] : 128;
-
-        int r = (yVal + 1.370705 * (vVal - 128)).round().clamp(0, 255);
-        int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128))
-            .round()
-            .clamp(0, 255);
-        int b = (yVal + 1.732446 * (uVal - 128)).round().clamp(0, 255);
-
-        image.setPixelRgb(x, y, r, g, b);
-      }
-    }
-    return image;
-  }
-
-  /// Rotate image based on camera sensor orientation.
-  img.Image _rotateImage(img.Image image, int sensorOrientation) {
-    if (sensorOrientation == 0) return image;
-    return img.copyRotate(image, angle: sensorOrientation);
-  }
 
   List<List<List<List<int>>>> _buildInputTensor(img.Image resized) {
     return List<List<List<List<int>>>>.generate(

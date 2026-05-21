@@ -47,7 +47,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
   }
   @override void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _keepScanning = false; _cam?.dispose(); _tts.dispose();
+    _keepScanning = false; _cam?.dispose(); _tts.stop();
     super.dispose();
   }
 

@@ -53,7 +53,7 @@ class _MenuCardState extends State<MenuCard>
         onTapUp: (_) {
           setState(() => _pressed = false);
           Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => widget.option.page));
+              .push(MaterialPageRoute(builder: widget.option.pageBuilder));
         },
         onTapCancel: () => setState(() => _pressed = false),
         child: AnimatedScale(

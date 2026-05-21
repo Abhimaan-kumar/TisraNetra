@@ -175,8 +175,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _welcome() async {
     await Future.delayed(const Duration(milliseconds: 800));
     await _tts.speakLocalized(
-      'Welcome to LifeLens. Press volume up and say a feature name to open it.',
-      'लाइफ लेंस में आपका स्वागत है। वॉल्यूम अप दबाएं और फीचर का नाम बोलें।',
+      'Welcome to Tisra Netra. Press volume up and say a feature name to open it.',
+      'तीसरा नेत्र में आपका स्वागत है। वॉल्यूम अप दबाएं और फीचर का नाम बोलें।',
     );
   }
 
@@ -281,7 +281,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _volService.dispose();
     _speech.cancel();
-    _tts.dispose();
+    _tts.stop();
     super.dispose();
   }
 
@@ -294,61 +294,61 @@ class _HomeScreenState extends State<HomeScreen> {
         'Read Anything',
         Icons.book,
         const Color(0xFF03998A),
-        const ReadAnythingScreen(),
+        (_) => const ReadAnythingScreen(),
       ),
       MenuOption(
         'Currency',
         Icons.attach_money,
         Colors.deepPurple,
-        const CurrencyScreen(),
+        (_) => const CurrencyScreen(),
       ),
       MenuOption(
         'Navigate',
         Icons.navigation,
         Colors.indigo,
-        const NavigateScreen(),
+        (_) => const NavigateScreen(),
       ),
       MenuOption(
         'Object Recognition',
         Icons.search,
         Colors.green,
-        const ObjectRecognitionScreen(),
+        (_) => const ObjectRecognitionScreen(),
       ),
       MenuOption(
         'Scene Captioning',
         Icons.camera_alt,
         const Color(0xFF018E55),
-        const SceneCaptioningScreen(),
+        (_) => const SceneCaptioningScreen(),
       ),
       MenuOption(
         'Person Identification',
         Icons.tag_faces_outlined,
         const Color(0xFFCFB067),
-        const PersonIdentificationScreen(),
+        (_) => const PersonIdentificationScreen(),
       ),
       MenuOption(
         'Color',
         Icons.color_lens,
         const Color(0xFF1E79E9),
-        const ColorScreen(),
+        (_) => const ColorScreen(),
       ),
       MenuOption(
         'Talk with Volunteer',
         Icons.phone_in_talk_rounded,
         const Color(0xFF8E4925),
-        const TalkWithVoluntaryScreen(),
+        (_) => const TalkWithVoluntaryScreen(),
       ),
       MenuOption(
         'AI Buddy',
         Icons.chat_outlined,
         const Color(0xFF69761E),
-        const AIBuddyScreen(),
+        (_) => const AIBuddyScreen(),
       ),
       MenuOption(
         'Emergency',
         Icons.emoji_people_rounded,
         Colors.red,
-        const EmergencyScreen(),
+        (_) => const EmergencyScreen(),
       ),
     ];
 
@@ -398,7 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Life Lens',
+                            'Tisra Netra',
                             style: GoogleFonts.inter(
                               fontSize: 22,
                               fontWeight: FontWeight.w900,

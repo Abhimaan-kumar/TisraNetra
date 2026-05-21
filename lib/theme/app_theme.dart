@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// LifeLens Premium Dark Theme
+/// Percive Premium Dark Theme
 /// Centralized design tokens – UI only, zero functional changes.
 class AppTheme {
   AppTheme._();

@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 typedef VolumeButtonCallback = Future<void> Function();
 
 class VolumeButtonService {
-  static const platform = MethodChannel('com.lifelens.app/volumebutton');
+  static const platform = MethodChannel('com.percive.app/volumebutton');
   
   static final List<VolumeButtonService> _stack = [];
   static bool _handlerInitialized = false;

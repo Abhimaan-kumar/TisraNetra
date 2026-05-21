@@ -19,7 +19,7 @@ plugins {
 }
 
 android {
-    namespace = "com.lifelens.app"
+    namespace = "com.percive.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -49,7 +49,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.lifelens.app"
+        applicationId = "com.percive.app"
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

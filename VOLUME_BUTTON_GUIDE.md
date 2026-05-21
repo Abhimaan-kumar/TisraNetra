@@ -1,8 +1,8 @@
-# Volume Button Controls & Voice Commands - LifeLens App
+# Volume Button Controls & Voice Commands - Percive App
 
 ## Overview
 
-The LifeLens app now supports comprehensive volume button controls and voice commands throughout the entire application. This enables hands-free operation with full language support for both English and Hindi.
+The Percive app now supports comprehensive volume button controls and voice commands throughout the entire application. This enables hands-free operation with full language support for both English and Hindi.
 
 ## Global Controls
 
@@ -218,7 +218,7 @@ Feature Screens:
 Ensure your Android `MainActivity.kt` has the MethodChannel handler:
 
 ```kotlin
-private val volumeButtonChannel = "com.lifelens.app/volumebutton"
+private val volumeButtonChannel = "com.percive.app/volumebutton"
 
 override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)

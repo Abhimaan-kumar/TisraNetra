@@ -73,7 +73,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Life Lens")),
+        MaterialPageRoute(builder: (_) =>  HomeScreen(title: " to Tisra Netra")),
       );
        
     } on FirebaseAuthException catch (e) {

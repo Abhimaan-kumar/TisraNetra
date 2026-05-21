@@ -1,4 +1,4 @@
-package com.example.lifelens
+package com.example.percive
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -28,6 +28,7 @@ import '../services/path_analyzer_service.dart';
 import '../services/navigation_service.dart';
 import '../services/face_embedding_service.dart';
 import '../services/face_db_service.dart';
+import '../utils/image_utils.dart';
 import '../services/tts_service.dart';
 import '../services/scene_labeling_service.dart';
 import '../widgets/volume_button_mixin.dart';
@@ -85,24 +86,24 @@ class _NavigateScreenState extends State<NavigateScreen>
   // ── Mode state ────────────────────────────────────────────────────────────
   _NavMode _mode = _NavMode.modeSelect;
 
-  // ── Walk mode state ───────────────────────────────────────────────────────
-  List<NavDetectedObject> _detections = [];
-  PathAnalysis? _pathAnalysis;
-  String _walkStatus = 'Initializing...';
+  // ── Walk mode state (ValueNotifiers — micro-rebuilds) ─────────────────────
+  final ValueNotifier<List<NavDetectedObject>> _detectionsN = ValueNotifier([]);
+  final ValueNotifier<PathAnalysis?> _pathAnalysisN = ValueNotifier(null);
+  final ValueNotifier<String> _walkStatusN = ValueNotifier('Initializing...');
   bool _walkActive = false;
 
   // ── Face recognition state ────────────────────────────────────────────────
   List<PersonRecord> _persons = [];
-  String _lastFaceName = '';
+  final ValueNotifier<String> _faceNameN = ValueNotifier('');
   DateTime _lastFaceAnnounce = DateTime(2000);
 
-  // ── Destination mode state ────────────────────────────────────────────────
-  String _destStatus = 'Say your destination';
-  String _currentInstruction = '';
+  // ── Destination mode state (ValueNotifiers — micro-rebuilds) ──────────────
+  final ValueNotifier<String> _destStatusN = ValueNotifier('Say your destination');
+  final ValueNotifier<String> _currentInstructionN = ValueNotifier('');
   bool _navActive = false;
-  NavigationSnapshot? _navSnapshot;
-  bool _isRerouting = false;
-  bool _isApproachingTurn = false;
+  final ValueNotifier<NavigationSnapshot?> _navSnapshotN = ValueNotifier(null);
+  final ValueNotifier<bool> _isReroutingN = ValueNotifier(false);
+  final ValueNotifier<bool> _isApproachingTurnN = ValueNotifier(false);
 
   // ── Safety vs Route priority ──────────────────────────────────────────────
   DateTime _lastSafetySpeak = DateTime(2000);
@@ -143,7 +144,17 @@ class _NavigateScreenState extends State<NavigateScreen>
     _faceDetector.close();
     _sceneLabeler.dispose();
     _navService.dispose();
-    _tts.dispose();
+    _tts.stop();
+    // Dispose ValueNotifiers
+    _detectionsN.dispose();
+    _pathAnalysisN.dispose();
+    _walkStatusN.dispose();
+    _faceNameN.dispose();
+    _destStatusN.dispose();
+    _currentInstructionN.dispose();
+    _navSnapshotN.dispose();
+    _isReroutingN.dispose();
+    _isApproachingTurnN.dispose();
     super.dispose();
   }
 
@@ -170,9 +181,7 @@ class _NavigateScreenState extends State<NavigateScreen>
       // Navigation service callbacks
       _navService.onInstruction = (en, hi) {
         if (!mounted) return;
-        setState(() {
-          _currentInstruction = en;
-        });
+        _currentInstructionN.value = en;
         // Only speak route instructions if no critical safety alert active
         final safetyRecent = DateTime.now().difference(_lastSafetySpeak).inSeconds < 3;
         if (!safetyRecent) {
@@ -181,37 +190,33 @@ class _NavigateScreenState extends State<NavigateScreen>
       };
       _navService.onArrived = () {
         if (!mounted) return;
+        _destStatusN.value = 'You have arrived!';
+        _navSnapshotN.value = null;
         setState(() {
-          _destStatus = 'You have arrived!';
           _navActive = false;
           _walkActive = false;
-          _navSnapshot = null;
         });
         _tts.speakLocalized('You have arrived at your destination. Well done!', 'आप अपनी मंजिल पर पहुंच गए हैं। बहुत बढ़िया!');
       };
       _navService.onStateChange = (state) {
         if (!mounted) return;
-        setState(() {
-          if (state == NavigationState.error) {
-            _destStatus = 'Navigation error. Try again.';
-          } else if (state == NavigationState.rerouting) {
-            _isRerouting = true;
-            _destStatus = 'Recalculating route...';
-          } else if (state == NavigationState.navigating && _isRerouting) {
-            _isRerouting = false;
-            _destStatus = 'Route updated.';
-          }
-        });
+        if (state == NavigationState.error) {
+          _destStatusN.value = 'Navigation error. Try again.';
+        } else if (state == NavigationState.rerouting) {
+          _isReroutingN.value = true;
+          _destStatusN.value = 'Recalculating route...';
+        } else if (state == NavigationState.navigating && _isReroutingN.value) {
+          _isReroutingN.value = false;
+          _destStatusN.value = 'Route updated.';
+        }
       };
       _navService.onNavigationUpdate = (snapshot) {
         if (!mounted) return;
-        setState(() {
-          _navSnapshot = snapshot;
-          _isApproachingTurn = snapshot.isApproachingTurn;
-          if (_navActive) {
-            _destStatus = '${_navService.remainingDistanceText} · ETA ${snapshot.eta}';
-          }
-        });
+        _navSnapshotN.value = snapshot;
+        _isApproachingTurnN.value = snapshot.isApproachingTurn;
+        if (_navActive) {
+          _destStatusN.value = '${_navService.remainingDistanceText} · ETA ${snapshot.eta}';
+        }
       };
       _navService.onReroute = (message) {
         if (!mounted) return;
@@ -293,12 +298,12 @@ class _NavigateScreenState extends State<NavigateScreen>
     try {
       // 1. Object detection (with integrated depth estimation)
       final detections =
-          _detectionService.detect(image, _sensorOrientation);
+          await _detectionService.detect(image, _sensorOrientation);
 
       // 2. Structural blockage detection (walls, doors)
       String? structuralBlocker;
       if (detections.isEmpty || detections.every((d) => d.dangerLevel == DangerLevel.info)) {
-         final inputImage = _buildInputImage(image);
+         final inputImage = await _buildInputImage(image);
          structuralBlocker = await _sceneLabeler.detectStructuralBlockage(inputImage);
       }
 
@@ -313,13 +318,11 @@ class _NavigateScreenState extends State<NavigateScreen>
 
       if (!mounted) return;
 
-      setState(() {
-        _detections = detections;
-        _pathAnalysis = analysis;
-        if (_mode == _NavMode.walkMode) {
-          _walkStatus = analysis.guidance;
-        }
-      });
+      _detectionsN.value = detections;
+      _pathAnalysisN.value = analysis;
+      if (_mode == _NavMode.walkMode) {
+        _walkStatusN.value = analysis.guidance;
+      }
 
       // 5. Speak guidance — safety alerts take priority over route instructions
       if (_walkActive || _navActive) {
@@ -359,16 +362,16 @@ class _NavigateScreenState extends State<NavigateScreen>
 
     try {
       // Build InputImage for ML Kit face detection
-      final inputImage = _buildInputImage(image);
+      final inputImage = await _buildInputImage(image);
       final faces = await _faceDetector.processImage(inputImage);
       if (faces.isEmpty) return null;
 
-      // Convert to RGB and process
-      final rgbImage = _faceService.convertCameraImage(image);
-      final rotated =
-          _faceService.rotateImage(rgbImage, _sensorOrientation);
-      final faceImage =
-          _faceService.cropFace(rotated, faces.first.boundingBox);
+      // Convert to RGB and process using background isolate
+      final faceImage = await processCameraImageIsolate(
+        image: image,
+        sensorOrientation: _sensorOrientation,
+        cropRect: faces.first.boundingBox,
+      );
       final embedding = _faceService.getEmbedding(faceImage);
 
       // Match against database
@@ -392,51 +395,8 @@ class _NavigateScreenState extends State<NavigateScreen>
     }
   }
 
-  InputImage _buildInputImage(CameraImage image) {
-    final yPlane = image.planes[0];
-    final uPlane = image.planes[1];
-    final vPlane = image.planes[2];
-    final int width = image.width;
-    final int height = image.height;
-    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    late final Uint8List nv21;
-
-    if (uvPixelStride == 2) {
-      final int yRowBytes = width;
-      final int totalYBytes = yRowBytes * height;
-      final int totalUVBytes = vPlane.bytes.length;
-      nv21 = Uint8List(totalYBytes + totalUVBytes);
-      if (yPlane.bytesPerRow == width) {
-        nv21.setRange(0, totalYBytes, yPlane.bytes);
-      } else {
-        int dst = 0;
-        for (int row = 0; row < height; row++) {
-          final int src = row * yPlane.bytesPerRow;
-          nv21.setRange(dst, dst + width, yPlane.bytes, src);
-          dst += width;
-        }
-      }
-      nv21.setRange(totalYBytes, totalYBytes + totalUVBytes, vPlane.bytes);
-    } else {
-      final int uvWidth = width ~/ 2;
-      final int uvHeight = height ~/ 2;
-      final int ySize = width * height;
-      nv21 = Uint8List(ySize + uvWidth * uvHeight * 2);
-      int pos = 0;
-      for (int row = 0; row < height; row++) {
-        final int offset = row * yPlane.bytesPerRow;
-        for (int col = 0; col < width; col++) {
-          nv21[pos++] = yPlane.bytes[offset + col];
-        }
-      }
-      for (int row = 0; row < uvHeight; row++) {
-        for (int col = 0; col < uvWidth; col++) {
-          nv21[pos++] = vPlane.bytes[row * vPlane.bytesPerRow + col];
-          nv21[pos++] = uPlane.bytes[row * uPlane.bytesPerRow + col];
-        }
-      }
-    }
+  Future<InputImage> _buildInputImage(CameraImage image) async {
+    final nv21 = await convertToNV21(image);
 
     final rotation = switch (_sensorOrientation) {
       0 => InputImageRotation.rotation0deg,
@@ -449,21 +409,21 @@ class _NavigateScreenState extends State<NavigateScreen>
     return InputImage.fromBytes(
       bytes: nv21,
       metadata: InputImageMetadata(
-        size: Size(width.toDouble(), height.toDouble()),
+        size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: rotation,
         format: InputImageFormat.nv21,
-        bytesPerRow: width,
+        bytesPerRow: image.width,
       ),
     );
   }
 
   void _announceFace(String name) {
     final now = DateTime.now();
-    if (name == _lastFaceName &&
+    if (name == _faceNameN.value &&
         now.difference(_lastFaceAnnounce).inSeconds < 8) {
       return;
     }
-    _lastFaceName = name;
+    _faceNameN.value = name;
     _lastFaceAnnounce = now;
 
     if (name == 'Unknown person') {
@@ -478,10 +438,10 @@ class _NavigateScreenState extends State<NavigateScreen>
   // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> _enterWalkMode() async {
+    _walkStatusN.value = 'Starting walk mode...';
     setState(() {
       _mode = _NavMode.walkMode;
       _walkActive = true;
-      _walkStatus = 'Starting walk mode...';
     });
     await _initCamera();
     _pathAnalyzer.resetCooldowns();
@@ -493,10 +453,10 @@ class _NavigateScreenState extends State<NavigateScreen>
   }
 
   Future<void> _enterDestinationMode() async {
+    _destStatusN.value = 'Say your destination...';
+    _currentInstructionN.value = '';
     setState(() {
       _mode = _NavMode.destinationMode;
-      _destStatus = 'Say your destination...';
-      _currentInstruction = '';
     });
     await _initCamera();
     _pathAnalyzer.resetCooldowns();
@@ -509,14 +469,14 @@ class _NavigateScreenState extends State<NavigateScreen>
   void _exitToModeSelect() {
     _walkActive = false;
     _navActive = false;
-    _isRerouting = false;
-    _navSnapshot = null;
+    _isReroutingN.value = false;
+    _navSnapshotN.value = null;
     _navService.stopNavigation();
     _stopCamera();
+    _detectionsN.value = [];
+    _pathAnalysisN.value = null;
     setState(() {
       _mode = _NavMode.modeSelect;
-      _detections = [];
-      _pathAnalysis = null;
     });
     _tts.speakLocalized(
       'Back to mode selection. Say walk mode or destination mode.',
@@ -540,9 +500,9 @@ class _NavigateScreenState extends State<NavigateScreen>
         break;
       case _NavMode.walkMode:
         // Repeat current guidance
-        if (_pathAnalysis != null) {
+        if (_pathAnalysisN.value != null) {
           _pathAnalyzer.resetCooldowns();
-          await _tts.speak(_pathAnalysis!.guidance);
+          await _tts.speak(_pathAnalysisN.value!.guidance);
         } else {
           await _tts.speakLocalized('Walk mode active. Point the camera ahead.', 'वॉक मोड सक्रिय है। कैमरा आगे की ओर रखें।');
         }
@@ -550,14 +510,14 @@ class _NavigateScreenState extends State<NavigateScreen>
       case _NavMode.destinationMode:
         if (_navActive) {
           // Repeat current instruction + remaining info
-          if (_currentInstruction.isNotEmpty) {
-            await _tts.speak(_currentInstruction);
+          if (_currentInstructionN.value.isNotEmpty) {
+            await _tts.speak(_currentInstructionN.value);
           }
           final remaining = _navService.getRemainingInfo();
           await _tts.speak(remaining);
           // Also announce obstacles if any
-          if (_detections.isNotEmpty) {
-            final names = _detections.take(3).map((d) => d.label).toSet().join(', ');
+          if (_detectionsN.value.isNotEmpty) {
+            final names = _detectionsN.value.take(3).map((d) => d.label).toSet().join(', ');
             await _tts.speakLocalized('Nearby obstacles: $names.', 'आसपास की बाधाएं: $names.');
           }
         } else {
@@ -617,27 +577,27 @@ class _NavigateScreenState extends State<NavigateScreen>
             c.contains('ahead') ||
             c.contains('samne')) {
           _pathAnalyzer.resetCooldowns();
-          if (_detections.isEmpty) {
+          if (_detectionsN.value.isEmpty) {
             await _tts
                 .speak(hi ? 'कुछ नहीं दिख रहा।' : 'Nothing detected ahead.');
           } else {
             final names =
-                _detections.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
+                _detectionsN.value.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
             await _tts.speak(hi ? 'सामने: $names।' : 'Ahead: $names.');
           }
         } else if (c.contains('how far') || c.contains('distance') || c.contains('kitna door')) {
-          if (_pathAnalysis?.closestDistanceLabel != null) {
+          if (_pathAnalysisN.value?.closestDistanceLabel != null) {
             await _tts.speak(hi
-                ? 'सबसे करीब ${_pathAnalysis!.closestDistanceLabel}।'
-                : 'Closest obstacle at ${_pathAnalysis!.closestDistanceLabel}.');
+                ? 'सबसे करीब ${_pathAnalysisN.value!.closestDistanceLabel}।'
+                : 'Closest obstacle at ${_pathAnalysisN.value!.closestDistanceLabel}.');
           } else {
             await _tts.speak(hi ? 'कोई बाधा नहीं।' : 'No obstacles detected.');
           }
         } else if (c.contains('who') || c.contains('kaun')) {
-          if (_lastFaceName.isNotEmpty) {
+          if (_faceNameN.value.isNotEmpty) {
             await _tts.speak(hi
-                ? 'यह $_lastFaceName है।'
-                : 'That is $_lastFaceName.');
+                ? 'यह ${_faceNameN.value} है।'
+                : 'That is ${_faceNameN.value}.');
           } else {
             await _tts.speak(
                 hi ? 'कोई चेहरा नहीं मिला।' : 'No person identified.');
@@ -655,12 +615,12 @@ class _NavigateScreenState extends State<NavigateScreen>
             c.contains('ruko') ||
             c.contains('band')) {
           _navService.stopNavigation();
+          _navSnapshotN.value = null;
+          _destStatusN.value = 'Navigation cancelled.';
+          _currentInstructionN.value = '';
           setState(() {
             _navActive = false;
             _walkActive = false;
-            _navSnapshot = null;
-            _destStatus = 'Navigation cancelled.';
-            _currentInstruction = '';
           });
           await _tts
               .speak(hi ? 'नेविगेशन रद्द।' : 'Navigation cancelled.');
@@ -673,18 +633,18 @@ class _NavigateScreenState extends State<NavigateScreen>
         } else if (c.contains('repeat') ||
             c.contains('again') ||
             c.contains('dobara')) {
-          if (_currentInstruction.isNotEmpty) {
-            await _tts.speak(_currentInstruction);
+          if (_currentInstructionN.value.isNotEmpty) {
+            await _tts.speak(_currentInstructionN.value);
           }
         } else if (c.contains('what') ||
             c.contains('ahead') ||
             c.contains('obstacle') ||
             c.contains('samne')) {
           // Report obstacles while navigating
-          if (_detections.isEmpty) {
+          if (_detectionsN.value.isEmpty) {
             await _tts.speak(hi ? 'रास्ता साफ है।' : 'Path is clear.');
           } else {
-            final names = _detections.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
+            final names = _detectionsN.value.take(5).map((d) => '${d.label} ${d.distanceLabel}').toSet().join(', ');
             await _tts.speak(hi ? 'सामने: $names।' : 'Ahead: $names.');
           }
         } else if (!_navActive) {
@@ -705,10 +665,8 @@ class _NavigateScreenState extends State<NavigateScreen>
         .replaceAll(RegExp(r'^(take me to|navigate to|go to|directions to|i want to go to|mujhe jana hai|rasta batao)\s+', caseSensitive: false), '')
         .trim();
 
-    setState(() {
-      _destStatus = 'Finding route to: $destination...';
-      _navSnapshot = null;
-    });
+    _destStatusN.value = 'Finding route to: $destination...';
+    _navSnapshotN.value = null;
     await _tts.speakLocalized('Finding route to $destination. Please wait.', '$destination के लिए रास्ता खोज रहे हैं। कृपया प्रतीक्षा करें।');
 
     final route = await _navService.getDirections(destination);
@@ -716,10 +674,10 @@ class _NavigateScreenState extends State<NavigateScreen>
 
     if (route == null) {
       if (_navService.lastPosition == null) {
-        setState(() => _destStatus = 'Could not get location.');
+        _destStatusN.value = 'Could not get location.';
         await _tts.speakLocalized('Sorry, I could not get your current location. Make sure location services are enabled.', 'क्षमा करें, मैं आपकी वर्तमान लोकेशन नहीं पा सका। सुनिश्चित करें कि लोकेशन सेवा चालू है।');
       } else {
-        setState(() => _destStatus = 'Could not find route. Try again.');
+        _destStatusN.value = 'Could not find route. Try again.';
         await _tts.speakLocalized(
           'Sorry, I could not find a walking route to $destination. '
           'Press volume up and say the destination again.',
@@ -729,9 +687,9 @@ class _NavigateScreenState extends State<NavigateScreen>
       return;
     }
 
+    _destStatusN.value =
+        '${route.totalDistance} · ETA ${route.totalDuration}';
     setState(() {
-      _destStatus =
-          '${route.totalDistance} · ETA ${route.totalDuration}';
       _navActive = true;
     });
 
@@ -1090,7 +1048,7 @@ class _NavigateScreenState extends State<NavigateScreen>
         // Status / guidance with distance info
         _buildGuidancePanel(),
         // Detected objects chips with distance
-        if (_detections.isNotEmpty) _buildDetectionChips(),
+        _buildDetectionChips(),
         // Controls
         _buildWalkControls(),
       ],
@@ -1115,13 +1073,18 @@ class _NavigateScreenState extends State<NavigateScreen>
 
         // Path boundary lines + bounding boxes + distance labels overlay
         Positioned.fill(
-          child: CustomPaint(
-            painter: _NavOverlayPainter(
-              objects: _detections,
-              faceName: _lastFaceName,
-              pathBoundary: _pathAnalysis?.pathBoundary,
-              urgency: _pathAnalysis?.urgency ?? VoiceUrgency.low,
-            ),
+          child: ListenableBuilder(
+            listenable: Listenable.merge([_detectionsN, _faceNameN, _pathAnalysisN]),
+            builder: (context, _) {
+              return CustomPaint(
+                painter: _NavOverlayPainter(
+                  objects: _detectionsN.value,
+                  faceName: _faceNameN.value,
+                  pathBoundary: _pathAnalysisN.value?.pathBoundary,
+                  urgency: _pathAnalysisN.value?.urgency ?? VoiceUrgency.low,
+                ),
+              );
+            },
           ),
         ),
 
@@ -1161,39 +1124,43 @@ class _NavigateScreenState extends State<NavigateScreen>
           ),
 
         // Closest distance badge
-        if (_pathAnalysis?.closestDistanceLabel != null)
-          Positioned(
-            top: 8,
-            left: 60,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _urgencyColor(_pathAnalysis?.urgency ?? VoiceUrgency.low)
-                      .withOpacity(0.6),
+        ValueListenableBuilder<PathAnalysis?>(
+          valueListenable: _pathAnalysisN,
+          builder: (context, analysis, _) {
+            if (analysis?.closestDistanceLabel == null) return const SizedBox.shrink();
+            return Positioned(
+              top: 8,
+              left: 60,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _urgencyColor(analysis!.urgency).withOpacity(0.6),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.straighten,
+                        color: _urgencyColor(analysis.urgency),
+                        size: 12),
+                    const SizedBox(width: 4),
+                    Text(
+                      analysis.closestDistanceLabel!,
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.straighten,
-                      color: _urgencyColor(_pathAnalysis?.urgency ?? VoiceUrgency.low),
-                      size: 12),
-                  const SizedBox(width: 4),
-                  Text(
-                    _pathAnalysis!.closestDistanceLabel!,
-                    style: GoogleFonts.inter(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+            );
+          },
+        ),
 
         // Listening indicator
         if (isMixinListening)
@@ -1236,157 +1203,171 @@ class _NavigateScreenState extends State<NavigateScreen>
   }
 
   Widget _buildZoneIndicator() {
-    final left = _pathAnalysis?.leftBlocked ?? false;
-    final center = _pathAnalysis?.centerBlocked ?? false;
-    final right = _pathAnalysis?.rightBlocked ?? false;
+    return ValueListenableBuilder<PathAnalysis?>(
+      valueListenable: _pathAnalysisN,
+      builder: (context, analysis, _) {
+        final left = analysis?.leftBlocked ?? false;
+        final center = analysis?.centerBlocked ?? false;
+        final right = analysis?.rightBlocked ?? false;
 
-    return SizedBox(
-      height: 8,
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              color: left ? _kRed : _kGreen,
-            ),
+        return SizedBox(
+          height: 8,
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(color: left ? _kRed : _kGreen),
+              ),
+              Container(width: 2, color: Colors.black),
+              Expanded(
+                child: Container(color: center ? _kRed : _kGreen),
+              ),
+              Container(width: 2, color: Colors.black),
+              Expanded(
+                child: Container(color: right ? _kRed : _kGreen),
+              ),
+            ],
           ),
-          Container(width: 2, color: Colors.black),
-          Expanded(
-            child: Container(
-              color: center ? _kRed : _kGreen,
-            ),
-          ),
-          Container(width: 2, color: Colors.black),
-          Expanded(
-            child: Container(
-              color: right ? _kRed : _kGreen,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _buildGuidancePanel() {
-    final analysis = _pathAnalysis;
-    final Color guidanceColor;
-    final IconData guidanceIcon;
+    return ListenableBuilder(
+      listenable: Listenable.merge([_pathAnalysisN, _walkStatusN, _detectionsN]),
+      builder: (context, _) {
+        final analysis = _pathAnalysisN.value;
+        final status = _walkStatusN.value;
+        final detections = _detectionsN.value;
+        
+        final Color guidanceColor;
+        final IconData guidanceIcon;
 
-    if (analysis == null || analysis.alertPriority == 0) {
-      guidanceColor = _kGreen;
-      guidanceIcon = Icons.check_circle_outline;
-    } else if (analysis.alertPriority == 1) {
-      guidanceColor = _kRed;
-      guidanceIcon = Icons.warning_amber_rounded;
-    } else if (analysis.alertPriority == 2) {
-      guidanceColor = _kYellow;
-      guidanceIcon = Icons.info_outline;
-    } else {
-      guidanceColor = _kIndigoLight;
-      guidanceIcon = Icons.explore_outlined;
-    }
+        if (analysis == null || analysis.alertPriority == 0) {
+          guidanceColor = _kGreen;
+          guidanceIcon = Icons.check_circle_outline;
+        } else if (analysis.alertPriority == 1) {
+          guidanceColor = _kRed;
+          guidanceIcon = Icons.warning_amber_rounded;
+        } else if (analysis.alertPriority == 2) {
+          guidanceColor = _kYellow;
+          guidanceIcon = Icons.info_outline;
+        } else {
+          guidanceColor = _kIndigoLight;
+          guidanceIcon = Icons.explore_outlined;
+        }
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: guidanceColor.withOpacity(0.1),
-        border: Border(
-          top: BorderSide(color: guidanceColor.withOpacity(0.3)),
-          bottom: BorderSide(color: guidanceColor.withOpacity(0.3)),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(guidanceIcon, color: guidanceColor, size: 24),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _walkStatus,
-                  style: GoogleFonts.inter(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (analysis?.closestDistanceLabel != null)
-                  Text(
-                    'Nearest: ${analysis!.closestDistanceLabel}',
-                    style: GoogleFonts.inter(
-                      color: guidanceColor.withOpacity(0.8),
-                      fontSize: 11,
-                    ),
-                  ),
-              ],
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: guidanceColor.withOpacity(0.1),
+            border: Border(
+              top: BorderSide(color: guidanceColor.withOpacity(0.3)),
+              bottom: BorderSide(color: guidanceColor.withOpacity(0.3)),
             ),
           ),
-          if (_detections.isNotEmpty)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: guidanceColor.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '${_detections.length}',
-                style: GoogleFonts.inter(
-                  color: guidanceColor,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+          child: Row(
+            children: [
+              Icon(guidanceIcon, color: guidanceColor, size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      status,
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (analysis?.closestDistanceLabel != null)
+                      Text(
+                        'Nearest: ${analysis!.closestDistanceLabel}',
+                        style: GoogleFonts.inter(
+                          color: guidanceColor.withOpacity(0.8),
+                          fontSize: 11,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            ),
-        ],
-      ),
+              if (detections.isNotEmpty)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: guidanceColor.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${detections.length}',
+                    style: GoogleFonts.inter(
+                      color: guidanceColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
   Widget _buildDetectionChips() {
-    return Container(
-      height: 44,
-      color: _kSurface,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: _detections.length.clamp(0, 8),
-        separatorBuilder: (_, __) => const SizedBox(width: 6),
-        itemBuilder: (_, i) {
-          final det = _detections[i];
-          final Color chipColor;
-          switch (det.dangerLevel) {
-            case DangerLevel.critical:
-              chipColor = _kRed;
-              break;
-            case DangerLevel.warning:
-              chipColor = _kYellow;
-              break;
-            case DangerLevel.info:
-              chipColor = _kIndigoLight;
-              break;
-          }
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: chipColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: chipColor.withOpacity(0.4)),
-            ),
-            child: Center(
-              child: Text(
-                '${det.label} ${det.distanceLabel}',
-                style: GoogleFonts.inter(
-                  color: chipColor,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+    return ValueListenableBuilder<List<NavDetectedObject>>(
+      valueListenable: _detectionsN,
+      builder: (context, detections, _) {
+        if (detections.isEmpty) return const SizedBox.shrink();
+        
+        return Container(
+          height: 44,
+          color: _kSurface,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: detections.length.clamp(0, 8),
+            separatorBuilder: (_, __) => const SizedBox(width: 6),
+            itemBuilder: (_, i) {
+              final det = detections[i];
+              final Color chipColor;
+              switch (det.dangerLevel) {
+                case DangerLevel.critical:
+                  chipColor = _kRed;
+                  break;
+                case DangerLevel.warning:
+                  chipColor = _kYellow;
+                  break;
+                case DangerLevel.info:
+                  chipColor = _kIndigoLight;
+                  break;
+              }
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: chipColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: chipColor.withOpacity(0.4)),
                 ),
-              ),
-            ),
-          );
-        },
-      ),
+                child: Center(
+                  child: Text(
+                    '${det.label} ${det.distanceLabel}',
+                    style: GoogleFonts.inter(
+                      color: chipColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -1434,8 +1415,8 @@ class _NavigateScreenState extends State<NavigateScreen>
             child: ElevatedButton.icon(
               onPressed: () {
                 _pathAnalyzer.resetCooldowns();
-                if (_pathAnalysis != null) {
-                  _tts.speak(_pathAnalysis!.guidance);
+                if (_pathAnalysisN.value != null) {
+                  _tts.speak(_pathAnalysisN.value!.guidance);
                 }
               },
               icon: const Icon(Icons.replay, size: 20),
@@ -1470,11 +1451,11 @@ class _NavigateScreenState extends State<NavigateScreen>
         // Navigation instruction panel
         _buildNavigationPanel(),
         // ETA / Distance / Progress bar
-        if (_navActive && _navSnapshot != null) _buildNavProgressBar(),
+        if (_navActive) _buildNavProgressBar(),
         // Destination status
         _buildDestStatusBar(),
         // Detected objects chips with distance (when navigating)
-        if (_navActive && _detections.isNotEmpty) _buildDetectionChips(),
+        if (_navActive && _detectionsN.value.isNotEmpty) _buildDetectionChips(),
         // Controls
         _buildDestControls(),
       ],
@@ -1482,330 +1463,357 @@ class _NavigateScreenState extends State<NavigateScreen>
   }
 
   Widget _buildDestZoneIndicator() {
-    final left = _pathAnalysis?.leftBlocked ?? false;
-    final center = _pathAnalysis?.centerBlocked ?? false;
-    final right = _pathAnalysis?.rightBlocked ?? false;
+    return ListenableBuilder(
+      listenable: Listenable.merge([_pathAnalysisN, _isApproachingTurnN]),
+      builder: (context, _) {
+        final analysis = _pathAnalysisN.value;
+        final approaching = _isApproachingTurnN.value;
 
-    return SizedBox(
-      height: 8,
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              color: left ? _kRed : _kGreen,
-            ),
-          ),
-          Container(width: 2, color: Colors.black),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: center ? _kRed : _kGreen,
-                // Pulsing border when approaching a turn
-                border: _isApproachingTurn
-                    ? Border.all(color: _kOrange, width: 2)
-                    : null,
+        final left = analysis?.leftBlocked ?? false;
+        final center = analysis?.centerBlocked ?? false;
+        final right = analysis?.rightBlocked ?? false;
+
+        return SizedBox(
+          height: 8,
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(color: left ? _kRed : _kGreen),
               ),
-            ),
+              Container(width: 2, color: Colors.black),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: center ? _kRed : _kGreen,
+                    border: approaching
+                        ? Border.all(color: _kOrange, width: 2)
+                        : null,
+                  ),
+                ),
+              ),
+              Container(width: 2, color: Colors.black),
+              Expanded(
+                child: Container(color: right ? _kRed : _kGreen),
+              ),
+            ],
           ),
-          Container(width: 2, color: Colors.black),
-          Expanded(
-            child: Container(
-              color: right ? _kRed : _kGreen,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _buildNavigationPanel() {
-    if (!_navActive || _currentInstruction.isEmpty) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-        decoration: BoxDecoration(
-          color: _kIndigo.withOpacity(0.1),
-          border: Border(
-            top: BorderSide(color: _kIndigo.withOpacity(0.3)),
-          ),
-        ),
-        child: Column(
-          children: [
-            Icon(Icons.navigation_rounded,
-                color: _kIndigo.withOpacity(0.5), size: 36),
-            const SizedBox(height: 8),
-            Text(
-              'Press Volume Up and say your destination',
-              style: GoogleFonts.inter(
-                color: Colors.white60,
-                fontSize: 14,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      );
-    }
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        _currentInstructionN,
+        _isReroutingN,
+        _navSnapshotN,
+        _isApproachingTurnN
+      ]),
+      builder: (context, _) {
+        final currentInstruction = _currentInstructionN.value;
+        final isRerouting = _isReroutingN.value;
+        final navSnapshot = _navSnapshotN.value;
+        final approaching = _isApproachingTurnN.value;
 
-    // Determine icon based on next maneuver
-    IconData maneuverIcon = Icons.navigation_rounded;
-    Color panelAccent = _kIndigo;
-    if (_isRerouting) {
-      maneuverIcon = Icons.refresh_rounded;
-      panelAccent = _kOrange;
-    } else if (_navService.nextStep?.maneuver != null) {
-      final m = _navService.nextStep!.maneuver!;
-      if (m.contains('left')) {
-        maneuverIcon = Icons.turn_left_rounded;
-      } else if (m.contains('right')) {
-        maneuverIcon = Icons.turn_right_rounded;
-      } else if (m.contains('uturn')) {
-        maneuverIcon = Icons.u_turn_left_rounded;
-      } else if (m.contains('straight')) {
-        maneuverIcon = Icons.straight_rounded;
-      } else if (m.contains('roundabout')) {
-        maneuverIcon = Icons.roundabout_left_rounded;
-      }
-    }
-
-    // Approaching turn: change panel accent
-    if (_isApproachingTurn) {
-      panelAccent = _kOrange;
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: panelAccent.withOpacity(0.12),
-        border: Border(
-          top: BorderSide(color: panelAccent.withOpacity(0.4)),
-          bottom: BorderSide(color: panelAccent.withOpacity(0.4)),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
+        if (!_navActive || currentInstruction.isEmpty) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
             decoration: BoxDecoration(
-              color: panelAccent,
-              borderRadius: BorderRadius.circular(12),
+              color: _kIndigo.withOpacity(0.1),
+              border: Border(
+                top: BorderSide(color: _kIndigo.withOpacity(0.3)),
+              ),
             ),
-            child: Icon(maneuverIcon, color: Colors.white, size: 24),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Icon(Icons.navigation_rounded,
+                    color: _kIndigo.withOpacity(0.5), size: 36),
+                const SizedBox(height: 8),
                 Text(
-                  _isRerouting ? 'Recalculating route...' : _currentInstruction,
+                  'Press Volume Up and say your destination',
                   style: GoogleFonts.inter(
-                    color: Colors.white,
+                    color: Colors.white60,
                     fontSize: 14,
-                    fontWeight: FontWeight.w600,
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 3),
-                Row(
-                  children: [
-                    Text(
-                      _navService.progressText,
-                      style: GoogleFonts.inter(
-                        color: _kIndigoLight,
-                        fontSize: 11,
-                      ),
-                    ),
-                    if (_navSnapshot != null) ...[
-                      const SizedBox(width: 8),
-                      Icon(Icons.straighten, color: _kIndigoLight, size: 11),
-                      const SizedBox(width: 3),
-                      Text(
-                        _navService.remainingDistanceText,
-                        style: GoogleFonts.inter(
-                          color: _kIndigoLight,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ],
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),
-          ),
-          // ETA badge
-          if (_navSnapshot != null)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: _kGreen.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _kGreen.withOpacity(0.3)),
-              ),
-              child: Column(
-                children: [
-                  Text(
-                    _navSnapshot!.eta,
-                    style: GoogleFonts.inter(
-                      color: _kGreen,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  Text(
-                    'ETA',
-                    style: GoogleFonts.inter(
-                      color: _kGreen.withOpacity(0.7),
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
+          );
+        }
+
+        IconData maneuverIcon = Icons.navigation_rounded;
+        Color panelAccent = _kIndigo;
+        if (isRerouting) {
+          maneuverIcon = Icons.refresh_rounded;
+          panelAccent = _kOrange;
+        } else if (_navService.nextStep?.maneuver != null) {
+          final m = _navService.nextStep!.maneuver!;
+          if (m.contains('left')) {
+            maneuverIcon = Icons.turn_left_rounded;
+          } else if (m.contains('right')) {
+            maneuverIcon = Icons.turn_right_rounded;
+          } else if (m.contains('uturn')) {
+            maneuverIcon = Icons.u_turn_left_rounded;
+          } else if (m.contains('straight')) {
+            maneuverIcon = Icons.straight_rounded;
+          } else if (m.contains('roundabout')) {
+            maneuverIcon = Icons.roundabout_left_rounded;
+          }
+        }
+
+        if (approaching) {
+          panelAccent = _kOrange;
+        }
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: panelAccent.withOpacity(0.12),
+            border: Border(
+              top: BorderSide(color: panelAccent.withOpacity(0.4)),
+              bottom: BorderSide(color: panelAccent.withOpacity(0.4)),
             ),
-        ],
-      ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: panelAccent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(maneuverIcon, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isRerouting ? 'Recalculating route...' : currentInstruction,
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Text(
+                          _navService.progressText,
+                          style: GoogleFonts.inter(
+                            color: _kIndigoLight,
+                            fontSize: 11,
+                          ),
+                        ),
+                        if (navSnapshot != null) ...[
+                          const SizedBox(width: 8),
+                          Icon(Icons.straighten, color: _kIndigoLight, size: 11),
+                          const SizedBox(width: 3),
+                          Text(
+                            _navService.remainingDistanceText,
+                            style: GoogleFonts.inter(
+                              color: _kIndigoLight,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (navSnapshot != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _kGreen.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _kGreen.withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        navSnapshot.eta,
+                        style: GoogleFonts.inter(
+                          color: _kGreen,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        'ETA',
+                        style: GoogleFonts.inter(
+                          color: _kGreen.withOpacity(0.7),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
   Widget _buildNavProgressBar() {
-    final snapshot = _navSnapshot!;
-    final totalSteps = snapshot.totalSteps;
-    final currentIdx = snapshot.currentStepIndex;
-    final progress = totalSteps > 0 ? (currentIdx / totalSteps) : 0.0;
+    return ListenableBuilder(
+      listenable: Listenable.merge([_navSnapshotN, _isApproachingTurnN]),
+      builder: (context, _) {
+        final snapshot = _navSnapshotN.value;
+        final approaching = _isApproachingTurnN.value;
 
-    // Next turn distance
-    final nextTurnDist = snapshot.distanceToNextTurn;
-    String nextTurnText;
-    if (nextTurnDist < 15) {
-      nextTurnText = 'Now';
-    } else if (nextTurnDist < 100) {
-      nextTurnText = '${nextTurnDist.round()} m';
-    } else {
-      nextTurnText = '${(nextTurnDist / 1000).toStringAsFixed(1)} km';
-    }
+        if (snapshot == null) return const SizedBox.shrink();
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      color: _kCard,
-      child: Column(
-        children: [
-          // Progress bar
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 4,
-              backgroundColor: _kCardBorder,
-              valueColor: AlwaysStoppedAnimation(
-                _isApproachingTurn ? _kOrange : _kIndigo,
-              ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        final totalSteps = snapshot.totalSteps;
+        final currentIdx = snapshot.currentStepIndex;
+        final progress = totalSteps > 0 ? (currentIdx / totalSteps) : 0.0;
+
+        final nextTurnDist = snapshot.distanceToNextTurn;
+        String nextTurnText;
+        if (nextTurnDist < 15) {
+          nextTurnText = 'Now';
+        } else if (nextTurnDist < 100) {
+          nextTurnText = '${nextTurnDist.round()} m';
+        } else {
+          nextTurnText = '${(nextTurnDist / 1000).toStringAsFixed(1)} km';
+        }
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          color: _kCard,
+          child: Column(
             children: [
-              // Next turn distance
-              Row(
-                children: [
-                  Icon(
-                    _isApproachingTurn
-                        ? Icons.warning_amber_rounded
-                        : Icons.swap_calls_rounded,
-                    color: _isApproachingTurn ? _kOrange : Colors.white54,
-                    size: 14,
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 4,
+                  backgroundColor: _kCardBorder,
+                  valueColor: AlwaysStoppedAnimation(
+                    approaching ? _kOrange : _kIndigo,
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Next turn: $nextTurnText',
-                    style: GoogleFonts.inter(
-                      color: _isApproachingTurn ? _kOrange : Colors.white54,
-                      fontSize: 11,
-                      fontWeight: _isApproachingTurn
-                          ? FontWeight.w600
-                          : FontWeight.w400,
-                    ),
-                  ),
-                ],
-              ),
-              // Step counter
-              Text(
-                '${currentIdx + 1} / $totalSteps',
-                style: GoogleFonts.inter(
-                  color: Colors.white38,
-                  fontSize: 11,
                 ),
               ),
-              // Remaining distance
+              const SizedBox(height: 6),
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Icon(Icons.flag_outlined,
-                      color: Colors.white54, size: 13),
-                  const SizedBox(width: 3),
+                  Row(
+                    children: [
+                      Icon(
+                        approaching
+                            ? Icons.warning_amber_rounded
+                            : Icons.swap_calls_rounded,
+                        color: approaching ? _kOrange : Colors.white54,
+                        size: 14,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Next turn: $nextTurnText',
+                        style: GoogleFonts.inter(
+                          color: approaching ? _kOrange : Colors.white54,
+                          fontSize: 11,
+                          fontWeight: approaching
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
                   Text(
-                    _navService.remainingDistanceText,
+                    '${currentIdx + 1} / $totalSteps',
                     style: GoogleFonts.inter(
-                      color: Colors.white54,
+                      color: Colors.white38,
                       fontSize: 11,
                     ),
+                  ),
+                  Row(
+                    children: [
+                      const Icon(Icons.flag_outlined,
+                          color: Colors.white54, size: 13),
+                      const SizedBox(width: 3),
+                      Text(
+                        _navService.remainingDistanceText,
+                        style: GoogleFonts.inter(
+                          color: Colors.white54,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _buildDestStatusBar() {
-    return Container(
-      width: double.infinity,
-      color: _kSurface,
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14),
-      child: Row(
-        children: [
-          if (_isRerouting)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: _kOrange,
+    return ListenableBuilder(
+      listenable: Listenable.merge([_isReroutingN, _destStatusN]),
+      builder: (context, _) {
+        final isRerouting = _isReroutingN.value;
+        final status = _destStatusN.value;
+
+        return Container(
+          width: double.infinity,
+          color: _kSurface,
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 14),
+          child: Row(
+            children: [
+              if (isRerouting)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: _kOrange,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: Text(
+                  status,
+                  style: GoogleFonts.inter(
+                    color: isRerouting
+                        ? _kOrange
+                        : _navActive
+                            ? _kGreen
+                            : Colors.white60,
+                    fontSize: 12,
+                  ),
                 ),
               ),
-            ),
-          Expanded(
-            child: Text(
-              _destStatus,
-              style: GoogleFonts.inter(
-                color: _isRerouting
-                    ? _kOrange
-                    : _navActive
-                        ? _kGreen
-                        : Colors.white60,
-                fontSize: 12,
-              ),
-            ),
+              if (_navActive && _navService.currentRoute != null)
+                Text(
+                  _navService.currentRoute!.destinationAddress.length > 25
+                      ? '${_navService.currentRoute!.destinationAddress.substring(0, 25)}…'
+                      : _navService.currentRoute!.destinationAddress,
+                  style: GoogleFonts.inter(
+                    color: Colors.white30,
+                    fontSize: 10,
+                  ),
+                ),
+            ],
           ),
-          if (_navActive && _navService.currentRoute != null)
-            Text(
-              _navService.currentRoute!.destinationAddress.length > 25
-                  ? '${_navService.currentRoute!.destinationAddress.substring(0, 25)}…'
-                  : _navService.currentRoute!.destinationAddress,
-              style: GoogleFonts.inter(
-                color: Colors.white30,
-                fontSize: 10,
-              ),
-            ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1824,9 +1832,9 @@ class _NavigateScreenState extends State<NavigateScreen>
                   setState(() {
                     _navActive = false;
                     _walkActive = false;
-                    _navSnapshot = null;
-                    _destStatus = 'Navigation stopped.';
-                    _currentInstruction = '';
+                    _navSnapshotN.value = null;
+                    _destStatusN.value = 'Navigation stopped.';
+                    _currentInstructionN.value = '';
                   });
                   _tts.speakLocalized('Navigation stopped.', 'नेविगेशन रुक गया।');
                 },
@@ -1848,8 +1856,8 @@ class _NavigateScreenState extends State<NavigateScreen>
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: () {
-                  if (_currentInstruction.isNotEmpty) {
-                    _tts.speak(_currentInstruction);
+                  if (_currentInstructionN.value.isNotEmpty) {
+                    _tts.speak(_currentInstructionN.value);
                   }
                 },
                 icon: const Icon(Icons.replay, size: 18),

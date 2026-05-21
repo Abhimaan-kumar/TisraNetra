@@ -9,9 +9,7 @@
 //   • Cosine similarity
 
 import 'dart:math' show sqrt;
-import 'dart:ui' show Rect;
 
-import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -44,77 +42,7 @@ class FaceEmbeddingService {
     _isInitialized = false;
   }
 
-  // ── Image conversion ──────────────────────────────────────────────────────
 
-  /// Convert a CameraImage (YUV420 / NV21) to an [img.Image] (RGB).
-  img.Image convertCameraImage(CameraImage camera) {
-    final int w = camera.width;
-    final int h = camera.height;
-    final yPlane = camera.planes[0];
-    final uPlane = camera.planes[1];
-    final vPlane = camera.planes[2];
-    final int uvRowStride = uPlane.bytesPerRow;
-    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    final image = img.Image(width: w, height: h);
-
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        final int yIndex = y * yPlane.bytesPerRow + x;
-        final int uvIndex = uvPixelStride * (x ~/ 2) + uvRowStride * (y ~/ 2);
-
-        final int yVal = yPlane.bytes[yIndex];
-        final int uVal =
-            uvIndex < uPlane.bytes.length ? uPlane.bytes[uvIndex] : 128;
-        final int vVal =
-            uvIndex < vPlane.bytes.length ? vPlane.bytes[uvIndex] : 128;
-
-        // Standard YUV → RGB
-        int r = (yVal + 1.370705 * (vVal - 128)).round().clamp(0, 255);
-        int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128))
-            .round()
-            .clamp(0, 255);
-        int b = (yVal + 1.732446 * (uVal - 128)).round().clamp(0, 255);
-
-        image.setPixelRgb(x, y, r, g, b);
-      }
-    }
-    return image;
-  }
-
-  /// Rotate the image to match the device's upright orientation.
-  img.Image rotateImage(img.Image image, int sensorOrientation) {
-    if (sensorOrientation == 0) return image;
-    return img.copyRotate(image, angle: sensorOrientation);
-  }
-
-  // ── Face crop & pre-processing ────────────────────────────────────────────
-
-  /// Crop face region from the rotated RGB image, with padding.
-  img.Image cropFace(img.Image image, Rect boundingBox) {
-    final double padX = boundingBox.width * 0.15;
-    final double padY = boundingBox.height * 0.15;
-
-    int left = (boundingBox.left - padX).round().clamp(0, image.width - 1);
-    int top = (boundingBox.top - padY).round().clamp(0, image.height - 1);
-    int right =
-        (boundingBox.right + padX).round().clamp(left + 1, image.width);
-    int bottom =
-        (boundingBox.bottom + padY).round().clamp(top + 1, image.height);
-
-    int w = right - left;
-    int h = bottom - top;
-
-    // Safety: ensure valid dimensions
-    if (w < 10 || h < 10) {
-      w = (image.width * 0.3).round().clamp(10, image.width);
-      h = (image.height * 0.3).round().clamp(10, image.height);
-      left = (image.width - w) ~/ 2;
-      top = (image.height - h) ~/ 2;
-    }
-
-    return img.copyCrop(image, x: left, y: top, width: w, height: h);
-  }
 
   // ── TFLite inference ──────────────────────────────────────────────────────
 
