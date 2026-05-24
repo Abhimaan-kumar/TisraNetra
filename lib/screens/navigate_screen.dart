@@ -42,14 +42,14 @@ const _kProcessEveryN = 3;
 const _kFaceThreshold = 0.6;
 
 // Colours
-const _kIndigo = Color(0xFF3F51B5);
-const _kIndigoLight = Color(0xFF7986CB);
+const _kIndigo = Color(0xFF2980BA);
+const _kIndigoLight = Color(0xFF5D9BCA);
 const _kGreen = Color(0xFF00E676);
 const _kYellow = Color(0xFFFFD600);
 const _kRed = Color(0xFFFF3D71);
-const _kSurface = Color(0xFF141929);
-const _kCard = Color(0xFF1C2137);
-const _kCardBorder = Color(0xFF2A3050);
+const _kSurface = Color(0xFF263238);
+const _kCard = Color(0xFF37474F);
+const _kCardBorder = Color(0xFF455A64);
 const _kCyan = Color(0xFF00E5FF);
 const _kOrange = Color(0xFFFF9100);
 
@@ -713,7 +713,7 @@ class _NavigateScreenState extends State<NavigateScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: _kSurface,
       body: SafeArea(
         child: Column(
           children: [
@@ -756,7 +756,7 @@ class _NavigateScreenState extends State<NavigateScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.black,
+        color: _kSurface,
         border: Border(
           bottom: BorderSide(color: _kIndigo.withOpacity(0.3)),
         ),
@@ -907,9 +907,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                 title: 'Walk Mode',
                 titleHi: 'वॉक मोड',
                 description:
-                    'Real-time obstacle detection with directional guidance. '
-                    'AI detects objects, estimates distance, identifies people, '
-                    'and guides you safely with urgency-aware voice.',
+                    'Obstacle detection with directional guidance.',
                 color: _kGreen,
                 gradientColors: const [Color(0xFF00E676), Color(0xFF00B248)],
                 onTap: _enterWalkMode,
@@ -926,7 +924,7 @@ class _NavigateScreenState extends State<NavigateScreen>
                     'Voice-activated turn-by-turn navigation. '
                     'Say where you want to go and I\'ll guide you there safely.',
                 color: _kIndigo,
-                gradientColors: const [Color(0xFF3F51B5), Color(0xFF283593)],
+                gradientColors: const [Color(0xFF2980BA), Color(0xFF1A5276)],
                 onTap: _enterDestinationMode,
               ),
             ),
@@ -1134,7 +1132,7 @@ class _NavigateScreenState extends State<NavigateScreen>
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
+                  color: _kSurface.withOpacity(0.8),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _urgencyColor(analysis!.urgency).withOpacity(0.6),
@@ -1170,7 +1168,7 @@ class _NavigateScreenState extends State<NavigateScreen>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.7),
+                color: _kSurface.withOpacity(0.8),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Row(
@@ -1373,7 +1371,7 @@ class _NavigateScreenState extends State<NavigateScreen>
 
   Widget _buildWalkControls() {
     return Container(
-      color: Colors.black,
+      color: _kSurface,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Row(
         children: [
@@ -1819,7 +1817,7 @@ class _NavigateScreenState extends State<NavigateScreen>
 
   Widget _buildDestControls() {
     return Container(
-      color: Colors.black,
+      color: _kSurface,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Row(
         children: [
@@ -2082,7 +2080,7 @@ class _NavOverlayPainter extends CustomPainter {
             fontSize: 9,
             fontWeight: FontWeight.w700,
             letterSpacing: 1.2,
-            background: Paint()..color = Colors.black.withOpacity(0.5),
+            background: Paint()..color = const Color(0xFF263238).withOpacity(0.5),
           ),
         ),
         textDirection: TextDirection.ltr,

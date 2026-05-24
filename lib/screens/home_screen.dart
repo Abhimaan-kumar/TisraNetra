@@ -176,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await Future.delayed(const Duration(milliseconds: 800));
     await _tts.speakLocalized(
       'Welcome to Tisra Netra. Press volume up and say a feature name to open it.',
-      'तीसरा नेत्र में आपका स्वागत है। वॉल्यूम अप दबाएं और फीचर का नाम बोलें।',
+      'तीसरा नेत्र में आपका स्वागत है। वॉल्यूम बढ़ा कर आदेश दीजिये।',
     );
   }
 
