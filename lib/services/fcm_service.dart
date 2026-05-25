@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:io';
 
 /// Handles FCM token management and incoming notification routing.
 class FcmService {
@@ -17,6 +19,11 @@ class FcmService {
 
   // ───────────────────── initialise ──────────────────────
   Future<void> init() async {
+    // Request permission on Android 13+ programmatically
+    if (Platform.isAndroid) {
+      await Permission.notification.request();
+    }
+
     // Request permission (iOS / Android 13+)
     await _messaging.requestPermission(
       alert: true,
