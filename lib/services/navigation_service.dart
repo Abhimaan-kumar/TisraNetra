@@ -15,13 +15,13 @@
 //   │ • Smart cooldown — avoids repetitive announcements       │
 //   └─────────────────────────────────────────────────────────┘
 
-import 'dart:convert';
 import 'dart:async';
-import 'dart:math' show sqrt, sin, cos, atan2, pi;
-
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'dart:convert';
+import 'dart:math' show sin, cos, sqrt, atan2, pi, max, min;
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'language_preference_service.dart';
 
 // ─── Navigation step ─────────────────────────────────────────────────────────
 
@@ -191,7 +191,7 @@ class NavigationService {
   void Function(int stepIndex, int totalSteps)? onStepUpdate;
   void Function()? onArrived;
   void Function(NavigationSnapshot snapshot)? onNavigationUpdate;
-  void Function(String message)? onReroute;
+  void Function(String message, String messageHi)? onReroute;
 
   NavigationState get state => _state;
   RouteInfo? get currentRoute => _currentRoute;
@@ -214,6 +214,10 @@ class NavigationService {
 
   String get progressText {
     if (_currentRoute == null) return '';
+    final isHindi = LanguagePreferenceService().isHindi;
+    if (isHindi) {
+      return 'कदम ${_currentStepIndex + 1} कुल ${_currentRoute!.steps.length} में से';
+    }
     return 'Step ${_currentStepIndex + 1} of ${_currentRoute!.steps.length}';
   }
 
@@ -221,7 +225,7 @@ class NavigationService {
   String get remainingDistanceText {
     if (_currentRoute == null || _lastPosition == null) return '';
     final dist = _computeRemainingDistance();
-    return _formatDistance(dist);
+    return _formatDistanceLocalized(dist);
   }
 
   /// Live ETA in minutes based on Google Maps native step durations
@@ -258,12 +262,7 @@ class NavigationService {
   /// Formatted ETA string
   String get etaText {
     final mins = etaMinutes;
-    if (mins <= 0) return 'Arriving';
-    if (mins == 1) return '1 min';
-    if (mins < 60) return '$mins mins';
-    final hours = mins ~/ 60;
-    final remMins = mins % 60;
-    return '${hours}h ${remMins}m';
+    return _formatEtaLocalized(mins);
   }
 
   // ── Location ──────────────────────────────────────────────────────────────
@@ -617,7 +616,7 @@ class NavigationService {
   /// Reroute from current position to original destination.
   Future<void> _handleReroute(Position position) async {
     _setState(NavigationState.rerouting);
-    onReroute?.call('Recalculating route...');
+    onReroute?.call('Recalculating route...', 'रास्ता फिर से खोज रहे हैं...');
 
     try {
       final origin = '${position.latitude},${position.longitude}';
@@ -639,7 +638,10 @@ class NavigationService {
         onInstruction?.call(instruction, instructionHi);
       } else {
         _setState(NavigationState.navigating); // Fall back to existing route
-        onReroute?.call('Could not recalculate. Continuing on current route.');
+        onReroute?.call(
+          'Could not recalculate. Continuing on current route.',
+          'रास्ता फिर से नहीं खोजा जा सका। वर्तमान रास्ते पर जारी रख रहे हैं।',
+        );
       }
     } catch (e) {
       debugPrint('[Nav] Reroute error: $e');
@@ -705,16 +707,26 @@ class NavigationService {
 
   /// Get remaining distance/time info for voice announcement.
   String getRemainingInfo() {
-    if (_currentRoute == null) return 'No active route.';
+    final isHindi = LanguagePreferenceService().isHindi;
+    if (_currentRoute == null) {
+      return isHindi ? 'कोई सक्रिय रास्ता नहीं है।' : 'No active route.';
+    }
     if (_currentStepIndex >= _currentRoute!.steps.length) {
-      return 'You have arrived.';
+      return isHindi ? 'आप पहुँच गए हैं।' : 'You have arrived.';
     }
     final remaining = _currentRoute!.steps.length - _currentStepIndex;
-    final dist = _formatDistance(_computeRemainingDistance());
-    final eta = etaText;
+    final distText = _formatDistanceLocalized(_computeRemainingDistance());
+    final etaTextVal = etaText;
+    
+    if (isHindi) {
+      return '$remaining कदम बाकी हैं। '
+          'मंजिल तक $distText। '
+          'पहुँचने का अनुमानित समय $etaTextVal है।';
+    }
+    
     return '$remaining steps remaining. '
-        '$dist to destination. '
-        'Estimated arrival in $eta.';
+        '$distText to destination. '
+        'Estimated arrival in $etaTextVal.';
   }
 
   /// Compute total remaining distance from current position.
@@ -763,6 +775,35 @@ class NavigationService {
     if (metres < 50) return '${metres.round()} meters';
     if (metres < 1000) return '${(metres / 10).round() * 10} meters';
     return '${(metres / 1000).toStringAsFixed(1)} kilometers';
+  }
+
+  String _formatDistanceLocalized(double metres) {
+    final isHindi = LanguagePreferenceService().isHindi;
+    if (isHindi) {
+      if (metres < 50) return '${metres.round()} मीटर';
+      if (metres < 1000) return '${(metres / 10).round() * 10} मीटर';
+      return '${(metres / 1000).toStringAsFixed(1)} किलोमीटर';
+    }
+    return _formatDistance(metres);
+  }
+
+  String _formatEtaLocalized(int mins) {
+    final isHindi = LanguagePreferenceService().isHindi;
+    if (isHindi) {
+      if (mins <= 0) return 'अभी';
+      if (mins == 1) return '1 मिनट';
+      if (mins < 60) return '$mins मिनट';
+      final hours = mins ~/ 60;
+      final remMins = mins % 60;
+      if (remMins == 0) return '$hours घंटे';
+      return '$hours घंटे और $remMins मिनट';
+    }
+    if (mins <= 0) return 'Arriving';
+    if (mins == 1) return '1 min';
+    if (mins < 60) return '$mins mins';
+    final hours = mins ~/ 60;
+    final remMins = mins % 60;
+    return '${hours}h ${remMins}m';
   }
 
   /// Round distance to natural breakpoints for voice (e.g. "20 meters")

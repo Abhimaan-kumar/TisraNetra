@@ -90,7 +90,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     if (uid == null) {
       return Scaffold(
+        backgroundColor: AppTheme.bg,
         body: Container(
+          width: double.infinity,
+          height: double.infinity,
           decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
           child: Center(
             child: Text('Not signed in',
@@ -101,7 +104,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     return Scaffold(
+      backgroundColor: AppTheme.bg,
       body: Container(
+        width: double.infinity,
+        height: double.infinity,
         decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
         child: SafeArea(
           child: Column(

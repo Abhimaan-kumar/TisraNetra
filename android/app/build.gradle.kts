@@ -19,7 +19,7 @@ plugins {
 }
 
 android {
-    namespace = "com.percive.app"
+    namespace = "com.futureluck.tisranetrta"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -49,7 +49,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.percive.app"
+        applicationId = "com.futureluck.tisranetrta"
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

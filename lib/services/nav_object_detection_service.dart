@@ -16,6 +16,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'depth_estimation_service.dart';
 import '../utils/image_utils.dart';
+import '../services/language_preference_service.dart';
 
 // ─── Danger level for navigation alerts ──────────────────────────────────────
 
@@ -59,6 +60,53 @@ class NavDetectedObject {
 
   /// Approximate area fraction of the frame (larger = closer)
   double get areaFraction => boundingBox.width * boundingBox.height;
+
+  /// Translated label for voice/UI in Hindi if preferred.
+  String get labelLabel {
+    final isHindi = LanguagePreferenceService().isHindi;
+    if (!isHindi) return label;
+    switch (label.toLowerCase()) {
+      case 'person': return 'व्यक्ति';
+      case 'bicycle': return 'साइकिल';
+      case 'car': return 'कार';
+      case 'motorcycle': return 'मोटरसाइकिल';
+      case 'bus': return 'बस';
+      case 'train': return 'ट्रेन';
+      case 'truck': return 'ट्रक';
+      case 'traffic light': return 'यातायात बत्ती';
+      case 'fire hydrant': return 'फायर हाइड्रेंट';
+      case 'stop sign': return 'स्टॉप साइन';
+      case 'parking meter': return 'पार्किंग मीटर';
+      case 'bench': return 'बेंच';
+      case 'bird': return 'पक्षी';
+      case 'cat': return 'बिल्ली';
+      case 'dog': return 'कुत्ता';
+      case 'horse': return 'घोड़ा';
+      case 'sheep': return 'भेड़';
+      case 'cow': return 'गाय';
+      case 'elephant': return 'हाथी';
+      case 'backpack': return 'बस्ता';
+      case 'umbrella': return 'छाता';
+      case 'handbag': return 'हाथ का थैला';
+      case 'suitcase': return 'सूटकेस';
+      case 'bottle': return 'बोतल';
+      case 'cup': return 'कप';
+      case 'chair': return 'कुर्सी';
+      case 'couch': return 'सोफा';
+      case 'potted plant': return 'गमला';
+      case 'bed': return 'बिस्तर';
+      case 'dining table': return 'खाने की मेज';
+      case 'toilet': return 'शौचालय';
+      case 'tv': return 'टीवी';
+      case 'laptop': return 'लैपटॉप';
+      case 'cell phone': return 'मोबाइल';
+      case 'sink': return 'सिंक';
+      case 'refrigerator': return 'फ्रिज';
+      case 'book': return 'किताब';
+      case 'clock': return 'घड़ी';
+      default: return label;
+    }
+  }
 
   const NavDetectedObject({
     required this.label,

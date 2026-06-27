@@ -253,6 +253,7 @@ class PathAnalyzerService {
     // Check for immediate critical danger
     if (primaryThreat.dangerLevel == DangerLevel.critical) {
       final label = primaryThreat.label;
+      final labelHi = primaryThreat.labelLabel;
       final dist = primaryThreat.distanceLabel;
       final zone = primaryThreat.centerX < _leftEnd
           ? 'on the left'
@@ -268,11 +269,11 @@ class PathAnalyzerService {
       // Include distance in the guidance for urgency context
       if (primaryThreat.proximityZone == ProximityZone.veryClose) {
         guidance = 'Stop! $label very close $zone!';
-        guidanceHi = 'रुकें! $label बहुत करीब $zoneHi!';
+        guidanceHi = 'रुकें! $labelHi बहुत करीब $zoneHi!';
         alertPriority = 1;
       } else {
         guidance = 'Warning! $label $zone, $dist.';
-        guidanceHi = 'सावधान! $label $zoneHi, $dist।';
+        guidanceHi = 'सावधान! $labelHi $zoneHi, $dist।';
         alertPriority = 1;
       }
 
@@ -308,6 +309,12 @@ class PathAnalyzerService {
               o.dangerLevel == DangerLevel.warning)
           .map((o) => o.label)
           .join(', ');
+      final centerLabelHi = centerObjects
+          .where((o) =>
+              o.dangerLevel == DangerLevel.critical ||
+              o.dangerLevel == DangerLevel.warning)
+          .map((o) => o.labelLabel)
+          .join(', ');
       final centerDist = centerObjects
           .where((o) =>
               o.dangerLevel == DangerLevel.critical ||
@@ -319,17 +326,17 @@ class PathAnalyzerService {
         // Prefer the side with fewer obstacles
         if (leftObjects.length <= rightObjects.length) {
           guidance = '$centerLabel ahead ($centerDist). Move left.';
-          guidanceHi = 'सामने $centerLabel ($centerDist)। बाईं ओर जाएं।';
+          guidanceHi = 'सामने $centerLabelHi ($centerDist)। बाईं ओर जाएं।';
         } else {
           guidance = '$centerLabel ahead ($centerDist). Move right.';
-          guidanceHi = 'सामने $centerLabel ($centerDist)। दाईं ओर जाएं।';
+          guidanceHi = 'सामने $centerLabelHi ($centerDist)। दाईं ओर जाएं।';
         }
       } else if (!leftBlocked) {
         guidance = '$centerLabel ahead ($centerDist). Move left.';
-        guidanceHi = 'सामने $centerLabel ($centerDist)। बाईं ओर जाएं।';
+        guidanceHi = 'सामने $centerLabelHi ($centerDist)। बाईं ओर जाएं।';
       } else if (!rightBlocked) {
         guidance = '$centerLabel ahead ($centerDist). Move right.';
-        guidanceHi = 'सामने $centerLabel ($centerDist)। दाईं ओर जाएं।';
+        guidanceHi = 'सामने $centerLabelHi ($centerDist)। दाईं ओर जाएं।';
       } else {
         guidance = 'Path blocked in all directions. Stop and wait.';
         guidanceHi = 'सभी दिशाओं में रास्ता बंद। रुकें और प्रतीक्षा करें।';
@@ -343,16 +350,21 @@ class PathAnalyzerService {
           .map((d) => d.label)
           .toSet()
           .join(', ');
+      final objectNamesHi = detections
+          .take(3)
+          .map((d) => d.labelLabel)
+          .toSet()
+          .join(', ');
 
       if (leftBlocked) {
         guidance = 'Path clear ahead. $objectNames on the left. Keep right.';
-        guidanceHi = 'रास्ता साफ है। बाईं ओर $objectNames। दाईं ओर चलें।';
+        guidanceHi = 'रास्ता साफ है। बाईं ओर $objectNamesHi। दाईं ओर चलें।';
       } else if (rightBlocked) {
         guidance = 'Path clear ahead. $objectNames on the right. Keep left.';
-        guidanceHi = 'रास्ता साफ है। दाईं ओर $objectNames। बाईं ओर चलें।';
+        guidanceHi = 'रास्ता साफ है। दाईं ओर $objectNamesHi। बाईं ओर चलें।';
       } else {
         guidance = 'Walk straight. Nearby: $objectNames.';
-        guidanceHi = 'सीधे चलें। आसपास: $objectNames।';
+        guidanceHi = 'सीधे चलें। आसपास: $objectNamesHi।';
       }
     }
 

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
+import 'language_preference_service.dart';
 
 class SceneCaptioningResult {
   final String caption;
@@ -10,6 +11,24 @@ class SceneCaptioningResult {
     required this.caption,
     required this.environment,
   });
+
+  String get environmentLabel {
+    final isHindi = LanguagePreferenceService().isHindi;
+    if (!isHindi) return environment;
+    switch (environment.toLowerCase()) {
+      case 'outdoor road': return 'बाहरी सड़क';
+      case 'shopping area': return 'दुकान या बाज़ार';
+      case 'kitchen/dining': return 'रसोई या भोजन क्षेत्र';
+      case 'office/workspace': return 'कार्यालय या कार्यक्षेत्र';
+      case 'outdoor nature': return 'बाहरी प्रकृति या पार्क';
+      case 'bedroom': return 'शयनकक्ष';
+      case 'bathroom': return 'स्नानघर';
+      case 'hallway': return 'गलियारा';
+      case 'living room': return 'बैठक कक्ष';
+      case 'people nearby': return 'आसपास के लोग';
+      case 'indoor space': default: return 'भीतरी स्थान';
+    }
+  }
 
   bool isSimilarTo(SceneCaptioningResult? other) {
     if (other == null) return false;
@@ -76,16 +95,23 @@ class SceneCaptioningService {
       String model, Uint8List imageBytes) async {
     final base64Image = base64Encode(imageBytes);
 
-    // Simple plain text prompt — no JSON, just describe the scene
-    const prompt =
-        'You are helping a blind person understand what is in front of them. '
-        'Look at this image and describe the scene in 1-2 short sentences. '
-        'Start directly with what you see. '
-        'Be specific about objects, people, and setting. '
-        'Keep it under 30 words. '
-        'Example: "A busy street with cars and people walking on the pavement. '
-        'There are shops on both sides." '
-        'Do not say "I see" or "The image shows". Just describe directly.';
+    final isHindi = LanguagePreferenceService().isHindi;
+    final prompt = isHindi
+        ? 'आप एक दृष्टिबाधित व्यक्ति की मदद कर रहे हैं यह समझने में कि उनके सामने क्या है। '
+          'इस छवि को देखें और 1-2 छोटे वाक्यों में दृश्य का वर्णन करें। '
+          'जो कुछ भी आप देख रहे हैं, सीधे उससे शुरुआत करें। '
+          'वस्तुओं, लोगों और परिवेश के बारे में विशिष्ट विवरण दें। '
+          'इसे 30 शब्दों से कम में रखें। '
+          'उदाहरण: "सड़क पर कारों और फुटपाथ पर चलने वाले लोगों के साथ एक व्यस्त सड़क है। दोनों तरफ दुकानें हैं।" '
+          'यह कभी न कहें कि "मैं देख रहा हूँ" या "छवि दिखाती है"। केवल सीधा और सटीक वर्णन करें।'
+        : 'You are helping a blind person understand what is in front of them. '
+          'Look at this image and describe the scene in 1-2 short sentences. '
+          'Start directly with what you see. '
+          'Be specific about objects, people, and setting. '
+          'Keep it under 30 words. '
+          'Example: "A busy street with cars and people walking on the pavement. '
+          'There are shops on both sides." '
+          'Do not say "I see" or "The image shows". Just describe directly.';
 
     final body = jsonEncode({
       'contents': [

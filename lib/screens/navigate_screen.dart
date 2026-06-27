@@ -31,6 +31,7 @@ import '../services/face_db_service.dart';
 import '../utils/image_utils.dart';
 import '../services/tts_service.dart';
 import '../services/scene_labeling_service.dart';
+import '../services/language_preference_service.dart';
 import '../widgets/volume_button_mixin.dart';
 import '../theme/app_theme.dart';
 import 'registration.dart';
@@ -181,16 +182,18 @@ class _NavigateScreenState extends State<NavigateScreen>
       // Navigation service callbacks
       _navService.onInstruction = (en, hi) {
         if (!mounted) return;
-        _currentInstructionN.value = en;
+        final isHindi = LanguagePreferenceService().isHindi;
+        _currentInstructionN.value = isHindi ? hi : en;
         // Only speak route instructions if no critical safety alert active
         final safetyRecent = DateTime.now().difference(_lastSafetySpeak).inSeconds < 3;
         if (!safetyRecent) {
-          _tts.speak(en);
+          _tts.speak(isHindi ? hi : en);
         }
       };
       _navService.onArrived = () {
         if (!mounted) return;
-        _destStatusN.value = 'You have arrived!';
+        final isHindi = LanguagePreferenceService().isHindi;
+        _destStatusN.value = isHindi ? 'आप पहुँच गए हैं!' : 'You have arrived!';
         _navSnapshotN.value = null;
         setState(() {
           _navActive = false;
@@ -200,14 +203,15 @@ class _NavigateScreenState extends State<NavigateScreen>
       };
       _navService.onStateChange = (state) {
         if (!mounted) return;
+        final isHindi = LanguagePreferenceService().isHindi;
         if (state == NavigationState.error) {
-          _destStatusN.value = 'Navigation error. Try again.';
+          _destStatusN.value = isHindi ? 'नेविगेशन त्रुटि। पुनः प्रयास करें।' : 'Navigation error. Try again.';
         } else if (state == NavigationState.rerouting) {
           _isReroutingN.value = true;
-          _destStatusN.value = 'Recalculating route...';
+          _destStatusN.value = isHindi ? 'रास्ता फिर से खोज रहे हैं...' : 'Recalculating route...';
         } else if (state == NavigationState.navigating && _isReroutingN.value) {
           _isReroutingN.value = false;
-          _destStatusN.value = 'Route updated.';
+          _destStatusN.value = isHindi ? 'रास्ता अपडेट हो गया।' : 'Route updated.';
         }
       };
       _navService.onNavigationUpdate = (snapshot) {
@@ -215,12 +219,14 @@ class _NavigateScreenState extends State<NavigateScreen>
         _navSnapshotN.value = snapshot;
         _isApproachingTurnN.value = snapshot.isApproachingTurn;
         if (_navActive) {
-          _destStatusN.value = '${_navService.remainingDistanceText} · ETA ${snapshot.eta}';
+          final isHindi = LanguagePreferenceService().isHindi;
+          _destStatusN.value = '${_navService.remainingDistanceText} · ${isHindi ? 'अनुमानित समय' : 'ETA'} ${snapshot.eta}';
         }
       };
-      _navService.onReroute = (message) {
+      _navService.onReroute = (en, hi) {
         if (!mounted) return;
-        _tts.speak(message);
+        final isHindi = LanguagePreferenceService().isHindi;
+        _tts.speak(isHindi ? hi : en);
       };
 
       if (!mounted) return;
@@ -318,14 +324,18 @@ class _NavigateScreenState extends State<NavigateScreen>
 
       if (!mounted) return;
 
+      final isHindi = LanguagePreferenceService().isHindi;
+
       _detectionsN.value = detections;
       _pathAnalysisN.value = analysis;
       if (_mode == _NavMode.walkMode) {
-        _walkStatusN.value = analysis.guidance;
+        _walkStatusN.value = isHindi ? analysis.guidanceHi : analysis.guidance;
       }
 
       // 5. Speak guidance — safety alerts take priority over route instructions
       if (_walkActive || _navActive) {
+        final isHindi = LanguagePreferenceService().isHindi;
+        final guidanceText = isHindi ? analysis.guidanceHi : analysis.guidance;
         if (_pathAnalyzer.shouldSpeak(analysis)) {
           // In destination mode: safety alerts override route guidance
           if (_mode == _NavMode.destinationMode && _navActive) {
@@ -333,12 +343,12 @@ class _NavigateScreenState extends State<NavigateScreen>
             if (analysis.urgency == VoiceUrgency.critical ||
                 analysis.urgency == VoiceUrgency.high) {
               _lastSafetySpeak = DateTime.now();
-              await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+              await _tts.speakWithUrgency(guidanceText, analysis.urgency);
             }
             // Medium/low urgency: don't interrupt route instructions
           } else {
             // Walk mode: always speak
-            await _tts.speakWithUrgency(analysis.guidance, analysis.urgency);
+            await _tts.speakWithUrgency(guidanceText, analysis.urgency);
           }
         }
         // Announce identified face

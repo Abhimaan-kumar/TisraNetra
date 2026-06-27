@@ -57,20 +57,21 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'REDACTED_PRIVATE_API_KEY',
-    appId: '1:1010017474459:android:900bd2d1bb92e75a86733e',
-    messagingSenderId: '1010017474459',
-    projectId: 'lifelens-5bbd7',
-    storageBucket: 'lifelens-5bbd7.firebasestorage.app',
+    apiKey: 'AIzaSyAds1Vuln1wEMuxfbAwR_9i2ziGEmBLYI0',
+    appId: '1:506558902187:android:c4758858ec1cc8520cacee',
+    messagingSenderId: '506558902187',
+    projectId: 'tisra-netra',
+    storageBucket: 'tisra-netra.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyDQyRoRHJX9xxrflO2lNsPA1lCiw8Sw1wI',
-    appId: '1:1010017474459:ios:f8f34d81b28e69c586733e',
-    messagingSenderId: '1010017474459',
-    projectId: 'lifelens-5bbd7',
-    storageBucket: 'lifelens-5bbd7.firebasestorage.app',
-    iosClientId: '1010017474459-9gnonm0l38of51al7s7cq2974tp6l770.apps.googleusercontent.com',
+    apiKey: 'AIzaSyCtu4c2qupQdWcocYjM6K8tvEw1azfYvwc',
+    appId: '1:506558902187:ios:e366aebe461a26c20cacee',
+    messagingSenderId: '506558902187',
+    projectId: 'tisra-netra',
+    storageBucket: 'tisra-netra.firebasestorage.app',
+    iosClientId: '506558902187-s70f6f0cqb8svjdk781813c0quajhuak.apps.googleusercontent.com',
     iosBundleId: 'com.example.percive',
   );
+
 }

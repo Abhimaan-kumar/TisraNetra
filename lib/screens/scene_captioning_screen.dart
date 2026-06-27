@@ -26,14 +26,21 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
 
   bool _capturing = false, _scanning = false, _isSpeaking = false;
   bool _keepScanning = false;
-  String _status = 'Initializing…';
+  String _status = '';
   int _scanNo = 0;
+
+  bool get isHindi => _tts.isHindi;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _status = isHindi ? 'आरंभ किया जा रहा है…' : 'Initializing…';
     initVolumeButtonListener();
+    _initAll();
+  }
+
+  Future<void> _initAll() async {
     _initCamera();
     _tts.speakLocalized(
       'Scene captioning. I will describe what is in front of you.',
@@ -73,7 +80,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
   Future<void> _initCamera() async {
     try {
       _cameras = await availableCameras();
-      if (_cameras.isEmpty) { setState(() => _status = 'No camera'); return; }
+      if (_cameras.isEmpty) { setState(() => _status = isHindi ? 'कोई कैमरा नहीं मिला।' : 'No camera'); return; }
       final ctrl = CameraController(_cameras.first, ResolutionPreset.medium,
           enableAudio: false, imageFormatGroup: ImageFormatGroup.jpeg);
       await ctrl.initialize();
@@ -82,19 +89,19 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
       setState(() { _cam = ctrl; _camReady = true; });
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) _startScan();
-    } catch (e) { setState(() => _status = 'Camera error: $e'); }
+    } catch (e) { setState(() => _status = isHindi ? 'कैमरा त्रुटि: $e' : 'Camera error: $e'); }
   }
 
   void _startScan() {
     if (_scanning) return;
     _keepScanning = true;
-    setState(() { _scanning = true; _status = 'Scanning…'; });
+    setState(() { _scanning = true; _status = isHindi ? 'स्कैन किया जा रहा है…' : 'Scanning…'; });
     _loop();
   }
 
   void _stopScan() {
     _keepScanning = false;
-    setState(() { _scanning = false; _status = 'Paused.'; });
+    setState(() { _scanning = false; _status = isHindi ? 'रुका हुआ।' : 'Paused.'; });
   }
 
   Future<void> _loop() async {
@@ -107,7 +114,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
   Future<void> _capture() async {
     if (_capturing || !_camReady || _cam == null) return;
     _scanNo++;
-    setState(() { _capturing = true; _status = 'Scan #$_scanNo…'; });
+    setState(() { _capturing = true; _status = isHindi ? 'स्कैन #$_scanNo…' : 'Scan #$_scanNo…'; });
     try {
       final photo = await _cam!.takePicture();
       final bytes = await photo.readAsBytes();
@@ -115,17 +122,17 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
       if (!mounted) return;
       if (result != null && result.caption.isNotEmpty) {
         final isNew = !result.isSimilarTo(_prev);
-        setState(() { _prev = _last; _last = result; _status = '✓ Scene captured'; });
+        setState(() { _prev = _last; _last = result; _status = isHindi ? '✓ दृश्य कैप्चर किया गया' : '✓ Scene captured'; });
         if (isNew) {
           setState(() => _isSpeaking = true);
           await _tts.speak(result.caption);
           if (mounted) setState(() => _isSpeaking = false);
         }
       } else {
-        setState(() => _status = 'Could not caption scene.');
+        setState(() => _status = isHindi ? 'दृश्य का वर्णन नहीं किया जा सका।' : 'Could not caption scene.');
       }
     } catch (e) {
-      setState(() => _status = 'Error: $e');
+      setState(() => _status = isHindi ? 'त्रुटि: $e' : 'Error: $e');
     } finally { if (mounted) setState(() => _capturing = false); }
   }
 
@@ -140,8 +147,8 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
           onPressed: () { _keepScanning = false; Navigator.pop(context); },
         ),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Scene Captioning', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
-          Text(isMixinListening ? '🎤 Listening…' : 'Vol↑ = scan/pause  Vol↓ = home',
+          Text(isHindi ? 'दृश्य वर्णन' : 'Scene Captioning', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+          Text(isMixinListening ? (isHindi ? '🎤 सुन रहा हूँ…' : '🎤 Listening…') : (isHindi ? 'वॉल्यूम ↑ = स्कैन/रोकें  वॉल्यूम ↓ = होम' : 'Vol↑ = scan/pause  Vol↓ = home'),
               style: const TextStyle(color: Colors.white54, fontSize: 11)),
         ]),
         actions: [
@@ -170,7 +177,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(color: Colors.black.withOpacity(0.7), borderRadius: BorderRadius.circular(20)),
-          child: const Text('🎤 Listening…', style: TextStyle(color: Colors.tealAccent, fontSize: 12)))),
+          child: Text(isHindi ? '🎤 सुन रहा हूँ…' : '🎤 Listening…', style: const TextStyle(color: Colors.tealAccent, fontSize: 12)))),
     ]);
   }
 
@@ -183,7 +190,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
     constraints: const BoxConstraints(maxHeight: 120),
     color: Colors.grey[850], padding: const EdgeInsets.all(14),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(_last!.environment.toUpperCase(),
+      Text(_last!.environmentLabel.toUpperCase(),
           style: const TextStyle(color: Colors.tealAccent, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.w600)),
       const SizedBox(height: 6),
       Text(_last!.caption, style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4), maxLines: 4, overflow: TextOverflow.ellipsis),
@@ -195,7 +202,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
       Expanded(flex: 2, child: ElevatedButton.icon(
         onPressed: _camReady ? (_scanning ? _stopScan : _startScan) : null,
         icon: Icon(_scanning ? Icons.pause_circle_outline : Icons.play_circle_outline, size: 26),
-        label: Text(_scanning ? 'Pause' : 'Resume', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+        label: Text(_scanning ? (isHindi ? 'रोकें' : 'Pause') : (isHindi ? 'शुरू करें' : 'Resume'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
         style: ElevatedButton.styleFrom(
           backgroundColor: _scanning ? Colors.orange : Colors.tealAccent,
           foregroundColor: Colors.black,
@@ -206,7 +213,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
       Expanded(child: ElevatedButton.icon(
         onPressed: _last != null ? () => _tts.speak(_last!.caption) : null,
         icon: const Icon(Icons.replay, size: 22),
-        label: const Text('Repeat', style: TextStyle(fontSize: 15)),
+        label: Text(isHindi ? 'दोहराएं' : 'Repeat', style: const TextStyle(fontSize: 15)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.grey[800], foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 18),
