@@ -67,6 +67,21 @@ class FcmService {
     if (token != null) await _saveToken(token);
   }
 
+  /// Call this BEFORE sign-out so the old account stops receiving notifications
+  /// intended for its user type (e.g. Volunteer help-request alerts).
+  Future<void> clearTokenForCurrentUser() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+        'fcmToken': FieldValue.delete(),
+      });
+      debugPrint('[FCM] Token cleared for ${user.uid}');
+    } catch (e) {
+      debugPrint('[FCM] Failed to clear token: $e');
+    }
+  }
+
   // ─── Pending message for cold-start ─────────────────────
   RemoteMessage? _pendingMessage;
 

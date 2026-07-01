@@ -15,7 +15,7 @@ initializeApp();
  * Listens for new help_requests documents and sends push notifications
  * to all volunteer users who have a valid FCM token.
  */
-exports.onHelpRequestCreated = onDocumentCreated(
+exports.notifyVolunteersOnHelpRequest = onDocumentCreated(
   "help_requests/{requestId}",
   async (event) => {
     const snap = event.data;

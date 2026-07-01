@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/fcm_service.dart';
 import '../services/language_preference_service.dart';
 import '../theme/app_theme.dart';
 
@@ -448,6 +449,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     width: double.infinity,
                                     child: TextButton(
                                       onPressed: () async {
+                                        // Clear FCM token so old account stops getting notifications
+                                        await FcmService().clearTokenForCurrentUser();
                                         await FirebaseAuth.instance.signOut();
                                         if (mounted)
                                           Navigator.of(context).pop();

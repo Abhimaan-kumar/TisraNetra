@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/signaling_service.dart';
+import '../services/tts_service.dart';
+import '../services/volume_button_service.dart';
 import '../theme/app_theme.dart';
 
 /// Full-screen video call screen.
@@ -29,6 +31,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   bool _connected = false;
   bool _initializing = true;
   bool _isFlashlightOn = false;
+  final TtsService _ttsService = TtsService();
+  final VolumeButtonService _volumeService = VolumeButtonService();
 
   @override
   void initState() {
@@ -37,31 +41,88 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       requestId: widget.requestId,
       role: widget.role,
     );
+    _setupVolumeListener();
     _setup();
   }
 
+  void _setupVolumeListener() {
+    _volumeService.initialize(
+      onVolumeUp: () async {
+        // Volume up currently unused during call; reserved for future use
+      },
+      onVolumeDown: () async {
+        await _ttsService.speakLocalized(
+            'Ending call', 'कॉल समाप्त हो रहा है');
+        await _hangUp();
+      },
+    );
+  }
+
   Future<void> _setup() async {
-    await _signaling.init();
+    try {
+      await _ttsService.speakLocalized(
+        'Setting up call, please wait',
+        'कॉल सेट हो रहा है, कृपया प्रतीक्षा करें',
+      );
 
-    _signaling.onConnected = () {
-      if (mounted) setState(() => _connected = true);
-    };
-    _signaling.onDisconnected = () {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Call disconnected')),
-        );
-        Navigator.of(context).pop();
+      await _signaling.init();
+
+      _signaling.onConnected = () {
+        if (mounted) {
+          setState(() => _connected = true);
+          _ttsService.speakLocalized(
+            widget.role == 'client'
+                ? 'Volunteer connected. They can now see your camera feed.'
+                : 'Connected to client.',
+            widget.role == 'client'
+                ? 'स्वयंसेवक जुड़ गया है। वे अब आपका कैमरा फ़ीड देख सकते हैं।'
+                : 'क्लाइंट से जुड़ गए हैं।',
+          );
+        }
+      };
+      _signaling.onDisconnected = () {
+        if (mounted) {
+          _ttsService.speakLocalized('Call ended', 'कॉल समाप्त हो गई');
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Call disconnected')),
+          );
+          Navigator.of(context).pop();
+        }
+      };
+
+      if (widget.role == 'client') {
+        await _signaling.startAsClient();
+      } else {
+        await _signaling.startAsVolunteer();
       }
-    };
 
-    if (widget.role == 'client') {
-      await _signaling.startAsClient();
-    } else {
-      await _signaling.startAsVolunteer();
+      if (mounted) {
+        setState(() => _initializing = false);
+        _ttsService.speakLocalized(
+          'Call is ready. Waiting for '
+          '${widget.role == 'client' ? 'a volunteer' : 'the client'}'
+          ' to connect.',
+          'कॉल तैयार है। '
+          '${widget.role == 'client' ? 'स्वयंसेवक' : 'क्लाइंट'}'
+          ' के जुड़ने की प्रतीक्षा है।',
+        );
+      }
+    } catch (e) {
+      debugPrint('[VideoCall] Setup failed: $e');
+      if (mounted) {
+        setState(() => _initializing = false);
+        await _ttsService.speakLocalized(
+          'Failed to set up the call. Please check your camera and microphone permissions.',
+          'कॉल सेट करने में विफल। कृपया अपनी कैमरा और माइक्रोफ़ोन अनुमतियाँ जाँचें।',
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Call setup failed: $e')),
+          );
+          Navigator.of(context).pop();
+        }
+      }
     }
-
-    if (mounted) setState(() => _initializing = false);
   }
 
   Future<void> _hangUp() async {
@@ -78,6 +139,8 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   void dispose() {
+    _volumeService.dispose();
+    _ttsService.stop();
     _signaling.dispose();
     super.dispose();
   }

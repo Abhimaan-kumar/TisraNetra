@@ -202,7 +202,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         obscureText: _obscurePassword,
                         style: GoogleFonts.inter(color: AppTheme.textPrimary),
                         decoration: InputDecoration(
-                          labelText: "Password",
+                          labelText: "Set Password",
                           prefixIcon: const Icon(Icons.lock_outline,
                               color: AppTheme.textSecondary, size: 20),
                           suffixIcon: IconButton(
@@ -227,7 +227,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         dropdownColor: AppTheme.card,
                         style: GoogleFonts.inter(color: AppTheme.textPrimary),
                         decoration: const InputDecoration(
-                          labelText: "User Type",
+                          labelText: "Select User Type",
                           prefixIcon: Icon(Icons.badge_outlined,
                               color: AppTheme.textSecondary, size: 20),
                         ),

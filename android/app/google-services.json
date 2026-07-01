@@ -29,6 +29,13 @@
             {
               "client_id": "506558902187-akspei9r61tufuf4e8v4jbgig15bpjq3.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "506558902187-s70f6f0cqb8svjdk781813c0quajhuak.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.percive"
+              }
             }
           ]
         }
