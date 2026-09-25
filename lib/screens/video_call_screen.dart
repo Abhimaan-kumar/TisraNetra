@@ -4,6 +4,7 @@ import '../services/signaling_service.dart';
 import '../services/tts_service.dart';
 import '../services/volume_button_service.dart';
 import '../theme/app_theme.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 /// Full-screen video call screen.
 ///
@@ -37,6 +38,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   @override
   void initState() {
     super.initState();
+    WakelockPlus.enable();
     _signaling = SignalingService(
       requestId: widget.requestId,
       role: widget.role,
@@ -139,6 +141,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   void dispose() {
+    WakelockPlus.disable();
     _volumeService.dispose();
     _ttsService.stop();
     _signaling.dispose();

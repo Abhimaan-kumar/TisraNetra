@@ -417,44 +417,57 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     ),
+                    
                     // Profile button
-                    GestureDetector(
-                      onTap: () async {
-                        final user = FirebaseAuth.instance.currentUser;
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => user == null
-                                ? const RegistrationScreen()
-                                : const ProfileScreen(),
+                    Builder(
+                      builder: (context) {
+                        final isLoggedIn =
+                            FirebaseAuth.instance.currentUser != null;
+                        return GestureDetector(
+                          onTap: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => isLoggedIn
+                                    ? const ProfileScreen()
+                                    : const RegistrationScreen(),
+                              ),
+                            );
+                            await _tts.speakLocalized(
+                              'Back to home. Press volume up to open a feature.',
+                              'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।',
+                            );
+                          },
+                          child: Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: Colors.black,
+                                width: 1,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: isLoggedIn
+                                      ? Colors.black.withOpacity(0.05)
+                                      : Colors.red.withOpacity(0.8),
+                                  blurRadius: 15,
+                                  offset: const Offset(2, 4),
+                                ),
+                              ],
+                            ),
+                            child: Icon(
+                              isLoggedIn
+                                  ? Icons.person_outline_rounded
+                                  : Icons.person_add_alt_1_rounded,
+                              color: isLoggedIn ? Colors.black : Colors.red,
+                              size: 26,
+                            ),
                           ),
-                        );
-                        await _tts.speakLocalized(
-                          'Back to home. Press volume up to open a feature.',
-                          'होम पर वापस। वॉल्यूम अप दबाएं कोई फीचर खोलने के लिए।',
                         );
                       },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: Colors.grey.shade300,
-                            width: 1,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.person_outline_rounded,
-                            color: Colors.black87, size: 24),
-                      ),
                     ),
                   ],
                 ),

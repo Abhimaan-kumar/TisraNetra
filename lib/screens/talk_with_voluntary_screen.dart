@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import 'profile_screen.dart';
 import 'registration.dart';
 import 'video_call_screen.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 class TalkWithVoluntaryScreen extends StatefulWidget {
   const TalkWithVoluntaryScreen({super.key});
@@ -51,6 +52,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
 
   @override
   void dispose() {
+    WakelockPlus.disable();
     WidgetsBinding.instance.removeObserver(this);
     _volumeService.dispose();
     _ttsService.stop();
@@ -92,6 +94,8 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
         'createdAt': FieldValue.serverTimestamp(),
       });
 
+      WakelockPlus.enable();
+
       setState(() {
         _currentRequestId = docRef.id;
         _creatingRequest = false;
@@ -114,6 +118,7 @@ class _TalkWithVoluntaryScreenState extends State<TalkWithVoluntaryScreen>
         'status': 'cancelled',
       });
     } catch (_) {}
+    WakelockPlus.disable();
     setState(() => _currentRequestId = null);
   }
 
