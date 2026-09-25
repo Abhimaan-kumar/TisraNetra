@@ -47,7 +47,7 @@ class AppTheme {
     [Color(0xFF9B59B6), Color(0xFF6C3483)],  // Currency - purple
     [Color(0xFF3F51B5), Color(0xFF283593)],  // Navigate - indigo
     [Color(0xFF27AE60), Color(0xFF1E8449)],  // Object Recognition - green
-    [Color(0xFF16A085), Color(0xFF0E6655)],  // Scene Captioning - dark teal
+    [Color(0xFF16A085), Color(0xFF0E6655)],  // Understand Environment - dark teal
     [Color(0xFFD4AC0D), Color(0xFFB7950B)],  // Person ID - gold
     [Color(0xFF2980B9), Color(0xFF1A5276)],  // Color - blue
     [Color(0xFFCA6F1E), Color(0xFF935116)],  // Volunteer - copper

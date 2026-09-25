@@ -43,7 +43,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
   Future<void> _initAll() async {
     _initCamera();
     _tts.speakLocalized(
-      'Scene captioning. I will describe what is in front of you.',
+      'Understand Environment. I will describe what is in front of you.',
       'दृश्य वर्णन। मैं आपके सामने क्या है बताउंगा।',
     );
   }
@@ -147,7 +147,7 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
           onPressed: () { _keepScanning = false; Navigator.pop(context); },
         ),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(isHindi ? 'दृश्य वर्णन' : 'Scene Captioning', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+          Text(isHindi ? 'दृश्य वर्णन' : 'Understand Environment', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
           Text(isMixinListening ? (isHindi ? '🎤 सुन रहा हूँ…' : '🎤 Listening…') : (isHindi ? 'वॉल्यूम ↑ = स्कैन/रोकें  वॉल्यूम ↓ = होम' : 'Vol↑ = scan/pause  Vol↓ = home'),
               style: const TextStyle(color: Colors.white54, fontSize: 11)),
         ]),

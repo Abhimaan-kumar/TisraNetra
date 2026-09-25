@@ -57,13 +57,13 @@ final Map<String, (String label, Widget Function() builder)> _cmdMap = {
   'cheez': ('Object Recognition', () => const ObjectRecognitionScreen()),
   'kya hai': ('Object Recognition', () => const ObjectRecognitionScreen()),
 
-  // Scene Captioning
-  'scene': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'caption': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'describe': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'description': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'samne': ('Scene Captioning', () => const SceneCaptioningScreen()),
-  'kya ho rha hai': ('Scene Captioning', () => const SceneCaptioningScreen()),
+  // Understand Environment
+  'scene': ('Understand Environment', () => const SceneCaptioningScreen()),
+  'caption': ('Understand Environment', () => const SceneCaptioningScreen()),
+  'describe': ('Understand Environment', () => const SceneCaptioningScreen()),
+  'description': ('Understand Environment', () => const SceneCaptioningScreen()),
+  'samne': ('Understand Environment', () => const SceneCaptioningScreen()),
+  'kya ho rha hai': ('Understand Environment', () => const SceneCaptioningScreen()),
 
   // Person Identification
   'person': ('Person Identification', () => const PersonIdentificationScreen()),
@@ -315,7 +315,7 @@ class _HomeScreenState extends State<HomeScreen> {
         (_) => const ObjectRecognitionScreen(),
       ),
       MenuOption(
-        'Scene Captioning',
+        'Understand Environment',
         Icons.camera_alt,
         const Color(0xFF018E55),
         (_) => const SceneCaptioningScreen(),

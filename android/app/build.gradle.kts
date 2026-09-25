@@ -61,6 +61,12 @@ android {
     androidResources {
         noCompress += listOf("tflite", "lite")
     }
+
+    packaging {
+        jniLibs {
+            doNotStrip += "**/*.so"
+        }
+    }
     buildTypes {
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")

@@ -14,7 +14,7 @@ The Percive app now supports comprehensive volume button controls and voice comm
     - "currency" / "rupee" → Currency Detection
     - "navigate" / "direction" → Navigate
     - "object" / "recognize" → Object Recognition
-    - "scene" / "caption" / "describe" → Scene Captioning
+    - "scene" / "caption" / "describe" → Understand Environment
     - "person" / "identify" / "face" → Person Identification
     - "color" / "rang" → Color Detection
     - "talk" / "voluntary" / "help" → Talk with Volunteer
@@ -52,7 +52,7 @@ The Percive app now supports comprehensive volume button controls and voice comm
 
 ---
 
-### 2. **Scene Captioning Screen**
+### 2. **Understand Environment Screen**
 **Purpose**: Describe the scene in front of the camera
 
 - **Volume Up Button**: 
