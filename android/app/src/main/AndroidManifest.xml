@@ -22,7 +22,7 @@
             android:value="help_requests" />
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="REDACTED_PRIVATE_API_KEY"/>
+            android:value="${googleMapsApiKey}"/>
 
         <activity
             android:name=".MainActivity"

@@ -62,7 +62,7 @@ class _AIBuddyScreenState extends State<AIBuddyScreen>
 
 
   void _initializeGemini() {
-  const String apiKey = 'REDACTED_PRIVATE_API_KEY';
+  const String apiKey = String.fromEnvironment('GEMINI_API_KEY');
 
    const String systemPrompt = '''
 You are a helpful personal buddy named Tisra Netra that will be used by blinds people.

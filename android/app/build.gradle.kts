@@ -18,6 +18,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val localEnvironment = Properties()
+val localEnvironmentFile = rootProject.file("../.env")
+if (localEnvironmentFile.exists()) {
+    localEnvironmentFile.reader().use { localEnvironment.load(it) }
+}
+
 android {
     namespace = "com.futureluck.tisranetrta"
     compileSdk = flutter.compileSdkVersion
@@ -55,6 +61,10 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+        manifestPlaceholders["googleMapsApiKey"] = localEnvironment.getProperty(
+            "GOOGLE_MAPS_ANDROID_API_KEY",
+            localEnvironment.getProperty("GOOGLE_MAPS_API_KEY", "")
+        )
     }
 
     // Prevent compression of TFLite model files

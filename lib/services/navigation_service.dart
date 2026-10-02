@@ -156,7 +156,7 @@ class NavigationSnapshot {
 
 class NavigationService {
   // Google Maps Directions API key
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY';
+  static const String _apiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 
   // ── Navigation config ─────────────────────────────────────────────────────
   static const double _stepCompleteRadius = 15.0;   // metres to trigger next step
