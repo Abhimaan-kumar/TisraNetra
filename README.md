@@ -6,7 +6,7 @@ Tisra Netra is a Flutter accessibility app for blind and visually impaired users
 
 - [Volume button controls and voice commands](VOLUME_BUTTON_GUIDE.md)
 - [Architecture overview](ARCHITECTURE.md)
-- [Architecture and Project report.md](Architecture%20and%20Project%20report.md)
+- [Project report.md](Architecture%20and%20Project%20report.md)
 - [Sample data and manual test cases](samples/README.md)
 
 ## Features and platform support
