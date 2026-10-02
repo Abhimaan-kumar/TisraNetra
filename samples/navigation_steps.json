@@ -1,0 +1,16 @@
+{
+  "description": "Synthetic cues, not a live route or full Google API response.",
+  "stepDefaults": {
+    "distance": "100 m", "duration": "1 min",
+    "distanceMeters": 100, "durationSeconds": 60,
+    "startLat": 0.0, "startLng": 0.0, "endLat": 0.001, "endLng": 0.0
+  },
+  "cases": [
+    {"id": "left", "instruction": "Turn left", "maneuver": "turn-left", "expectedVoice": "turn to 9 o'clock"},
+    {"id": "right", "instruction": "Turn right", "maneuver": "turn-right", "expectedVoice": "turn to 3 o'clock"},
+    {"id": "u-turn", "instruction": "Make a U-turn", "maneuver": "uturn-left", "expectedVoice": "turn to 6 o'clock, U-turn"},
+    {"id": "straight", "instruction": "Continue straight", "maneuver": "straight", "expectedVoice": "continue straight, 12 o'clock"},
+    {"id": "unknown", "instruction": "Continue", "maneuver": "future-api-maneuver", "expectedVoice": "continue"},
+    {"id": "missing", "instruction": "Continue", "expectedVoice": "continue"}
+  ]
+}

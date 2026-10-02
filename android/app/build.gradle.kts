@@ -1,5 +1,7 @@
 import java.util.Properties
 import java.io.FileInputStream
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
@@ -22,6 +24,28 @@ val localEnvironment = Properties()
 val localEnvironmentFile = rootProject.file("../.env")
 if (localEnvironmentFile.exists()) {
     localEnvironmentFile.reader().use { localEnvironment.load(it) }
+}
+
+// Firebase's Android plugin needs a local JSON file. Generate it from the
+// key-free template so the only source of the API key is the ignored .env.
+val firebaseApiKey = localEnvironment.getProperty("FIREBASE_API_KEY", "")
+require(firebaseApiKey.isNotBlank()) {
+    "Set FIREBASE_API_KEY in the root .env before building Android."
+}
+val firebaseTemplate = file("google-services.json.template")
+@Suppress("UNCHECKED_CAST")
+val firebaseConfig = JsonSlurper().parse(firebaseTemplate) as Map<String, Any?>
+@Suppress("UNCHECKED_CAST")
+val firebaseClients = firebaseConfig["client"] as List<Map<String, Any?>>
+firebaseClients.forEach { client ->
+    @Suppress("UNCHECKED_CAST")
+    val apiKeys = client["api_key"] as List<MutableMap<String, Any?>>
+    apiKeys.forEach { it["current_key"] = firebaseApiKey }
+}
+val generatedFirebaseConfig = JsonOutput.prettyPrint(JsonOutput.toJson(firebaseConfig)) + "\n"
+val localFirebaseConfig = file("google-services.json")
+if (!localFirebaseConfig.exists() || localFirebaseConfig.readText() != generatedFirebaseConfig) {
+    localFirebaseConfig.writeText(generatedFirebaseConfig)
 }
 
 android {

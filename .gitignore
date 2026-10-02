@@ -19,6 +19,9 @@ build/
 # VS Code
 .vscode/
 .env
+.env.*
+!.env.example
+/android/app/google-services.json
 
 # IntelliJ / Android Studio
 .idea/

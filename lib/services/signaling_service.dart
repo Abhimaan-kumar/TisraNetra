@@ -59,25 +59,22 @@ class SignalingService {
   VoidCallback? onDisconnected;
 
   // ICE servers (STUN & TURN)
-  static const Map<String, dynamic> _config = {
+  static const String _turnUrls = String.fromEnvironment('TURN_URLS');
+  static const String _turnUsername = String.fromEnvironment('TURN_USERNAME');
+  static const String _turnPassword = String.fromEnvironment('TURN_PASSWORD');
+
+  static final Map<String, dynamic> _config = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:global.stun.twilio.com:3478'},
-      {
-        'urls': 'turn:openrelay.metered.ca:80',
-        'username': 'openrelayproject',
-        'credential': 'openrelayproject',
-      },
-      {
-        'urls': 'turn:openrelay.metered.ca:443',
-        'username': 'openrelayproject',
-        'credential': 'openrelayproject',
-      },
-      {
-        'urls': 'turn:openrelay.metered.ca:443?transport=tcp',
-        'username': 'openrelayproject',
-        'credential': 'openrelayproject',
-      }
+      if (_turnUrls.isNotEmpty &&
+          _turnUsername.isNotEmpty &&
+          _turnPassword.isNotEmpty)
+        {
+          'urls': _turnUrls.split(',').map((url) => url.trim()).toList(),
+          'username': _turnUsername,
+          'credential': _turnPassword,
+        },
     ],
   };
 

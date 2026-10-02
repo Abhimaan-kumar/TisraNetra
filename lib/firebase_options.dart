@@ -53,7 +53,7 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAds1Vuln1wEMuxfbAwR_9i2ziGEmBLYI0',
+    apiKey: String.fromEnvironment('FIREBASE_API_KEY'),
     appId: '1:506558902187:android:c4758858ec1cc8520cacee',
     messagingSenderId: '506558902187',
     projectId: 'tisra-netra',
