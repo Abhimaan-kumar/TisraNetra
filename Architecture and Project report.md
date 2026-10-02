@@ -1,4 +1,4 @@
-# 👁️ Tisra Netra — Comprehensive Architecture & Feature Analysis Report
+# Tisra Netra — Comprehensive Architecture & Feature Analysis Report
 
 > **Project Name:** Tisra Netra 
 > **Target Audience:** Visually impaired individuals & community volunteers  
