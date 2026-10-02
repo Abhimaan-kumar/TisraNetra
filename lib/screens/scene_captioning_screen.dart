@@ -1,5 +1,6 @@
 // lib/screens/scene_captioning_screen.dart
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../services/scene_captioning_service.dart';
@@ -86,8 +87,12 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
       await ctrl.initialize();
       await ctrl.setFocusMode(FocusMode.auto);
       if (!mounted) return;
-      setState(() { _cam = ctrl; _camReady = true; });
-      await Future.delayed(const Duration(milliseconds: 600));
+      setState(() {
+        _cam = ctrl;
+        _camReady = true;
+        _status = isHindi ? '2 सेकंड में शुरू हो रहा है…' : 'Starting in 2 seconds…';
+      });
+      await Future.delayed(const Duration(seconds: 2));
       if (mounted) _startScan();
     } catch (e) { setState(() => _status = isHindi ? 'कैमरा त्रुटि: $e' : 'Camera error: $e'); }
   }
@@ -107,32 +112,52 @@ class _SceneCaptioningScreenState extends State<SceneCaptioningScreen>
   Future<void> _loop() async {
     while (_keepScanning && mounted) {
       await _capture();
-      if (_keepScanning && mounted) await Future.delayed(const Duration(seconds: 3));
     }
   }
 
   Future<void> _capture() async {
     if (_capturing || !_camReady || _cam == null) return;
     _scanNo++;
-    setState(() { _capturing = true; _status = isHindi ? 'स्कैन #$_scanNo…' : 'Scan #$_scanNo…'; });
+    setState(() { _capturing = true; });
     try {
-      final photo = await _cam!.takePicture();
-      final bytes = await photo.readAsBytes();
-      final result = await _svc.captureSceneCaptioning(bytes);
+      final List<Uint8List> frames = [];
+      for (int i = 1; i <= 3; i++) {
+        if (!_keepScanning || !mounted) return;
+        setState(() => _status = isHindi ? 'फ़्रेम $i/3 लिया जा रहा है…' : 'Taking frame $i/3…');
+        final photo = await _cam!.takePicture();
+        final bytes = await photo.readAsBytes();
+        frames.add(bytes);
+        if (!_keepScanning || !mounted) return;
+        await Future.delayed(const Duration(seconds: 1));
+      }
+
+      if (!_keepScanning || !mounted) return;
+      setState(() => _status = isHindi ? 'वातावरण का विश्लेषण किया जा रहा है…' : 'Analyzing environment…');
+
+      final result = await _svc.captureSceneCaptioning(frames);
       if (!mounted) return;
+
       if (result != null && result.caption.isNotEmpty) {
         final isNew = !result.isSimilarTo(_prev);
-        setState(() { _prev = _last; _last = result; _status = isHindi ? '✓ दृश्य कैप्चर किया गया' : '✓ Scene captured'; });
+        setState(() { _prev = _last; _last = result; _status = isHindi ? '✓ वातावरण कैप्चर किया गया' : '✓ Environment captured'; });
         if (isNew) {
           setState(() => _isSpeaking = true);
-          await _tts.speak(result.caption);
+          await _tts.speak(result.caption, awaitCompletion: true);
           if (mounted) setState(() => _isSpeaking = false);
         }
       } else {
-        setState(() => _status = isHindi ? 'दृश्य का वर्णन नहीं किया जा सका।' : 'Could not caption scene.');
+        setState(() => _status = isHindi ? 'वातावरण का वर्णन नहीं किया जा सका।' : 'Could not describe environment.');
+      }
+
+      if (_keepScanning && mounted) {
+        setState(() => _status = isHindi ? '2 सेकंड प्रतीक्षा की जा रही है…' : 'Waiting 2 seconds…');
+        await Future.delayed(const Duration(seconds: 2));
       }
     } catch (e) {
       setState(() => _status = isHindi ? 'त्रुटि: $e' : 'Error: $e');
+      if (_keepScanning && mounted) {
+        await Future.delayed(const Duration(seconds: 2));
+      }
     } finally { if (mounted) setState(() => _capturing = false); }
   }
 

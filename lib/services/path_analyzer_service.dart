@@ -3,7 +3,8 @@
 // Spatial analysis of detected objects for walking navigation.
 // Divides the camera frame into 3 vertical zones (left / centre / right),
 // derives approximate walkable-path boundary lines, estimates urgency from
-// depth, and produces directional guidance + priority-based alerts.
+// depth, and produces directional guidance using **clock-position** directions
+// and **step-based** distances.
 
 import 'dart:math' show min, max;
 import 'depth_estimation_service.dart';
@@ -71,7 +72,7 @@ class PathAnalysis {
   /// Whether the centre path is clear of critical/warning obstacles
   final bool isPathClear;
 
-  /// Human-readable directional guidance
+  /// Human-readable directional guidance (with clock positions)
   final String guidance;
 
   /// Hindi translation of guidance
@@ -100,8 +101,11 @@ class PathAnalysis {
   /// Closest obstacle distance (metres), null if none
   final double? closestDistance;
 
-  /// Distance label for the closest threat
+  /// Distance label for the closest threat (in steps)
   final String? closestDistanceLabel;
+
+  /// Safe direction computed from depth map analysis
+  final SafeDirection safeDirection;
 
   const PathAnalysis({
     required this.isPathClear,
@@ -117,7 +121,41 @@ class PathAnalysis {
     required this.pathBoundary,
     this.closestDistance,
     this.closestDistanceLabel,
+    this.safeDirection = SafeDirection.straightAhead,
   });
+}
+
+// ─── Clock position helpers ──────────────────────────────────────────────────
+
+/// Convert a zone/direction to a clock-position string.
+class ClockDirection {
+  // ── Zone-based directions ──
+  static const String left = "9 o'clock";
+  static const String slightLeft = "10 o'clock";
+  static const String keepLeft = "10 o'clock";
+  static const String ahead = "12 o'clock";
+  static const String slightRight = "2 o'clock";
+  static const String keepRight = "2 o'clock";
+  static const String right = "3 o'clock";
+  static const String sharpLeft = "8 o'clock";
+  static const String sharpRight = "4 o'clock";
+  static const String behind = "6 o'clock";
+
+  // Hindi translations
+  static const String leftHi = "9 बजे की दिशा";
+  static const String slightLeftHi = "10 बजे की दिशा";
+  static const String keepLeftHi = "10 बजे की दिशा";
+  static const String aheadHi = "12 बजे की दिशा";
+  static const String slightRightHi = "2 बजे की दिशा";
+  static const String keepRightHi = "2 बजे की दिशा";
+  static const String rightHi = "3 बजे की दिशा";
+  static const String sharpLeftHi = "8 बजे की दिशा";
+  static const String sharpRightHi = "4 बजे की दिशा";
+  static const String behindHi = "6 बजे की दिशा";
+
+  /// Convert a SafeDirection's clock position to English text.
+  static String fromClockPos(int clockPos) => "$clockPos o'clock";
+  static String fromClockPosHi(int clockPos) => "$clockPos बजे की दिशा";
 }
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -137,7 +175,14 @@ class PathAnalyzerService {
 
   /// Analyzes the frame detections and generates navigation guidance.
   /// Converts visual positions into actionable voice prompts with urgency.
-  PathAnalysis analyze(List<NavDetectedObject> detections, {String? structuralBlocker}) {
+  /// Uses clock-position directions and step-based distances.
+  PathAnalysis analyze(
+    List<NavDetectedObject> detections, {
+    String? structuralBlocker,
+    SafeDirection? safeDirection,
+  }) {
+    final safeDirValue = safeDirection ?? SafeDirection.straightAhead;
+
     // ── Structural blocker override ─────────────────────────────────────────
     if (structuralBlocker != null) {
       String enGuidance;
@@ -147,18 +192,18 @@ class PathAnalyzerService {
         enGuidance = 'Door in front of you. Open the door.';
         hiGuidance = 'सामने दरवाज़ा है। कृपया दरवाज़ा खोलें।';
       } else if (structuralBlocker == 'wall') {
-        enGuidance = 'Wall in front of you. Move left or right.';
-        hiGuidance = 'सामने दीवार है। बाईं या दाईं ओर मुड़ें।';
+        enGuidance = "Wall in front of you. Move to ${ClockDirection.left} or ${ClockDirection.right}.";
+        hiGuidance = "सामने दीवार है। ${ClockDirection.leftHi} या ${ClockDirection.rightHi} मुड़ें।";
       } else {
-        enGuidance = 'Path blocked by $structuralBlocker. Move left or right.';
-        hiGuidance = 'सामने $structuralBlocker है। बाईं या दाईं ओर मुड़ें।';
+        enGuidance = "Path blocked by $structuralBlocker. Move to ${ClockDirection.left} or ${ClockDirection.right}.";
+        hiGuidance = "सामने $structuralBlocker है। ${ClockDirection.leftHi} या ${ClockDirection.rightHi} मुड़ें।";
       }
 
       return PathAnalysis(
         isPathClear: false,
         guidance: enGuidance,
         guidanceHi: hiGuidance,
-        alertPriority: 1, // Critical priority
+        alertPriority: 1,
         urgency: VoiceUrgency.critical,
         obstacles: [],
         primaryThreat: null,
@@ -167,23 +212,25 @@ class PathAnalyzerService {
         rightBlocked: true,
         pathBoundary: const PathBoundary(leftLineX: 0.5, rightLineX: 0.5),
         closestDistance: 0.5,
-        closestDistanceLabel: '< 1 m',
+        closestDistanceLabel: '< 1 step',
+        safeDirection: safeDirValue,
       );
     }
 
     // ── No detections → all clear ───────────────────────────────────────────
     if (detections.isEmpty) {
-      return const PathAnalysis(
+      return PathAnalysis(
         isPathClear: true,
-        guidance: 'Path is clear. Walk straight.',
-        guidanceHi: 'रास्ता साफ है। सीधे चलें।',
+        guidance: "Path is clear. Walk straight, ${ClockDirection.ahead}.",
+        guidanceHi: "रास्ता साफ है। सीधे चलें, ${ClockDirection.aheadHi}।",
         alertPriority: 0,
         urgency: VoiceUrgency.low,
-        obstacles: [],
+        obstacles: const [],
         leftBlocked: false,
         centerBlocked: false,
         rightBlocked: false,
-        pathBoundary: PathBoundary(leftLineX: 0.10, rightLineX: 0.90),
+        pathBoundary: const PathBoundary(leftLineX: 0.10, rightLineX: 0.90),
+        safeDirection: safeDirValue,
       );
     }
 
@@ -245,10 +292,14 @@ class PathAnalyzerService {
     // ── Determine voice urgency from proximity ──────────────────────────────
     final urgency = _computeUrgency(primaryThreat);
 
-    // ── Generate guidance ───────────────────────────────────────────────────
+    // ── Generate guidance with clock positions ──────────────────────────────
     String guidance;
     String guidanceHi;
     int alertPriority;
+
+    // Use safe direction's clock position for move guidance
+    final safeClock = ClockDirection.fromClockPos(safeDirValue.clockPosition);
+    final safeClockHi = ClockDirection.fromClockPosHi(safeDirValue.clockPosition);
 
     // Check for immediate critical danger
     if (primaryThreat.dangerLevel == DangerLevel.critical) {
@@ -256,48 +307,47 @@ class PathAnalyzerService {
       final labelHi = primaryThreat.labelLabel;
       final dist = primaryThreat.distanceLabel;
       final zone = primaryThreat.centerX < _leftEnd
-          ? 'on the left'
+          ? ClockDirection.left
           : primaryThreat.centerX > _rightStart
-              ? 'on the right'
-              : 'ahead';
+              ? ClockDirection.right
+              : ClockDirection.ahead;
       final zoneHi = primaryThreat.centerX < _leftEnd
-          ? 'बाईं ओर'
+          ? ClockDirection.leftHi
           : primaryThreat.centerX > _rightStart
-              ? 'दाईं ओर'
-              : 'सामने';
+              ? ClockDirection.rightHi
+              : ClockDirection.aheadHi;
 
-      // Include distance in the guidance for urgency context
       if (primaryThreat.proximityZone == ProximityZone.veryClose) {
-        guidance = 'Stop! $label very close $zone!';
+        guidance = 'Stop! $label very close at $zone!';
         guidanceHi = 'रुकें! $labelHi बहुत करीब $zoneHi!';
         alertPriority = 1;
       } else {
-        guidance = 'Warning! $label $zone, $dist.';
+        guidance = 'Warning! $label at $zone, $dist.';
         guidanceHi = 'सावधान! $labelHi $zoneHi, $dist।';
         alertPriority = 1;
       }
 
-      // Add directional instruction
-      if (zone == 'ahead') {
+      // Add directional instruction using safe direction from depth map
+      if (zone == ClockDirection.ahead) {
         if (!leftBlocked && !rightBlocked) {
-          guidance += ' Move to either side.';
-          guidanceHi += ' किसी भी तरफ हट जाएं।';
+          guidance += ' Move to $safeClock.';
+          guidanceHi += ' $safeClockHi जाएं।';
         } else if (!leftBlocked) {
-          guidance += ' Move left.';
-          guidanceHi += ' बाईं ओर जाएं।';
+          guidance += " Move to ${ClockDirection.left}.";
+          guidanceHi += " ${ClockDirection.leftHi} जाएं।";
         } else if (!rightBlocked) {
-          guidance += ' Move right.';
-          guidanceHi += ' दाईं ओर जाएं।';
+          guidance += " Move to ${ClockDirection.right}.";
+          guidanceHi += " ${ClockDirection.rightHi} जाएं।";
         } else {
           guidance += ' Stop! All paths blocked.';
           guidanceHi += ' रुकें! सभी रास्ते बंद हैं।';
         }
-      } else if (zone == 'on the left') {
-        guidance += ' Move right to avoid.';
-        guidanceHi += ' बचने के लिए दाईं ओर जाएं।';
-      } else if (zone == 'on the right') {
-        guidance += ' Move left to avoid.';
-        guidanceHi += ' बचने के लिए बाईं ओर जाएं।';
+      } else if (zone == ClockDirection.left) {
+        guidance += " Move to ${ClockDirection.right} to avoid.";
+        guidanceHi += " बचने के लिए ${ClockDirection.rightHi} जाएं।";
+      } else if (zone == ClockDirection.right) {
+        guidance += " Move to ${ClockDirection.left} to avoid.";
+        guidanceHi += " बचने के लिए ${ClockDirection.leftHi} जाएं।";
       }
     }
     // Centre path is blocked by obstacle
@@ -323,20 +373,15 @@ class PathAnalyzerService {
           .firstOrNull ?? '';
 
       if (!leftBlocked && !rightBlocked) {
-        // Prefer the side with fewer obstacles
-        if (leftObjects.length <= rightObjects.length) {
-          guidance = '$centerLabel ahead ($centerDist). Move left.';
-          guidanceHi = 'सामने $centerLabelHi ($centerDist)। बाईं ओर जाएं।';
-        } else {
-          guidance = '$centerLabel ahead ($centerDist). Move right.';
-          guidanceHi = 'सामने $centerLabelHi ($centerDist)। दाईं ओर जाएं।';
-        }
+        // Use depth-map-derived safe direction
+        guidance = '$centerLabel ahead ($centerDist). Move to $safeClock.';
+        guidanceHi = 'सामने $centerLabelHi ($centerDist)। $safeClockHi जाएं।';
       } else if (!leftBlocked) {
-        guidance = '$centerLabel ahead ($centerDist). Move left.';
-        guidanceHi = 'सामने $centerLabelHi ($centerDist)। बाईं ओर जाएं।';
+        guidance = "$centerLabel ahead ($centerDist). Move to ${ClockDirection.left}.";
+        guidanceHi = "सामने $centerLabelHi ($centerDist)। ${ClockDirection.leftHi} जाएं।";
       } else if (!rightBlocked) {
-        guidance = '$centerLabel ahead ($centerDist). Move right.';
-        guidanceHi = 'सामने $centerLabelHi ($centerDist)। दाईं ओर जाएं।';
+        guidance = "$centerLabel ahead ($centerDist). Move to ${ClockDirection.right}.";
+        guidanceHi = "सामने $centerLabelHi ($centerDist)। ${ClockDirection.rightHi} जाएं।";
       } else {
         guidance = 'Path blocked in all directions. Stop and wait.';
         guidanceHi = 'सभी दिशाओं में रास्ता बंद। रुकें और प्रतीक्षा करें।';
@@ -357,14 +402,14 @@ class PathAnalyzerService {
           .join(', ');
 
       if (leftBlocked) {
-        guidance = 'Path clear ahead. $objectNames on the left. Keep right.';
-        guidanceHi = 'रास्ता साफ है। बाईं ओर $objectNamesHi। दाईं ओर चलें।';
+        guidance = "Path clear ahead. $objectNames at ${ClockDirection.left}. Keep to ${ClockDirection.keepRight}.";
+        guidanceHi = "रास्ता साफ है। ${ClockDirection.leftHi} पर $objectNamesHi। ${ClockDirection.keepRightHi} पर चलें।";
       } else if (rightBlocked) {
-        guidance = 'Path clear ahead. $objectNames on the right. Keep left.';
-        guidanceHi = 'रास्ता साफ है। दाईं ओर $objectNamesHi। बाईं ओर चलें।';
+        guidance = "Path clear ahead. $objectNames at ${ClockDirection.right}. Keep to ${ClockDirection.keepLeft}.";
+        guidanceHi = "रास्ता साफ है। ${ClockDirection.rightHi} पर $objectNamesHi। ${ClockDirection.keepLeftHi} पर चलें।";
       } else {
-        guidance = 'Walk straight. Nearby: $objectNames.';
-        guidanceHi = 'सीधे चलें। आसपास: $objectNamesHi।';
+        guidance = "Walk straight, ${ClockDirection.ahead}. Nearby: $objectNames.";
+        guidanceHi = "सीधे चलें, ${ClockDirection.aheadHi}। आसपास: $objectNamesHi।";
       }
     }
 
@@ -382,24 +427,20 @@ class PathAnalyzerService {
       pathBoundary: pathBoundary,
       closestDistance: closestDist,
       closestDistanceLabel: closestDistLabel,
+      safeDirection: safeDirValue,
     );
   }
 
   // ── Path boundary derivation ──────────────────────────────────────────────
 
-  /// Derives the left and right boundary lines of the safe walking corridor
-  /// by analysing obstacle positions.  Obstacles push the walkable corridor
-  /// away from them (inner edges of bounding boxes define the boundary).
   PathBoundary _derivePathBoundary(
     List<NavDetectedObject> detections,
     bool leftBlocked,
     bool rightBlocked,
   ) {
-    // Default full-width corridor
     double leftLine = 0.08;
     double rightLine = 0.92;
 
-    // Only consider critical/warning-level obstacles for boundary derivation
     final blockers = detections.where((d) =>
         d.dangerLevel == DangerLevel.critical ||
         d.dangerLevel == DangerLevel.warning).toList();
@@ -408,37 +449,28 @@ class PathAnalyzerService {
       return PathBoundary(leftLineX: leftLine, rightLineX: rightLine);
     }
 
-    // Objects on the left push the left boundary rightward
     for (final det in blockers) {
       if (det.centerX < _leftEnd) {
-        // Left-side obstacle: safe corridor starts after its right edge
         leftLine = max(leftLine, det.boundingBox.right + 0.02);
       } else if (det.centerX > _rightStart) {
-        // Right-side obstacle: safe corridor ends before its left edge
         rightLine = min(rightLine, det.boundingBox.left - 0.02);
       } else {
-        // Centre obstacle: narrow the corridor from both sides proportionally
         final objLeft = det.boundingBox.left;
         final objRight = det.boundingBox.right;
-        // Push boundaries inward toward the wider gap
-        final gapLeft = objLeft;       // space to the left of the object
-        final gapRight = 1.0 - objRight; // space to the right
+        final gapLeft = objLeft;
+        final gapRight = 1.0 - objRight;
 
         if (gapLeft > gapRight) {
-          // More room on the left — push right boundary left
           rightLine = min(rightLine, objLeft - 0.02);
         } else {
-          // More room on the right — push left boundary right
           leftLine = max(leftLine, objRight + 0.02);
         }
       }
     }
 
-    // Ensure sanity
     leftLine = leftLine.clamp(0.0, 0.48);
     rightLine = rightLine.clamp(0.52, 1.0);
     if (leftLine >= rightLine) {
-      // Corridor collapsed — place lines at the centre
       leftLine = 0.48;
       rightLine = 0.52;
     }
@@ -462,12 +494,9 @@ class PathAnalyzerService {
   }
 
   /// Check if this guidance should be spoken (avoids repetitive announcements).
-  /// Returns true if guidance is new or enough time has passed.
-  /// Uses urgency-aware cooldowns: critical = shorter cooldown.
   bool shouldSpeak(PathAnalysis analysis) {
     final now = DateTime.now();
 
-    // Critical / very-close alerts always speak (with 1.5s cooldown)
     if (analysis.urgency == VoiceUrgency.critical) {
       if (now.difference(_lastGuidanceTime).inMilliseconds >= 1500) {
         _lastGuidance = analysis.guidance;
@@ -477,7 +506,6 @@ class PathAnalyzerService {
       return false;
     }
 
-    // High urgency: speak if guidance changed, or after 2.5s cooldown
     if (analysis.urgency == VoiceUrgency.high ||
         analysis.alertPriority == 1) {
       if (now.difference(_lastGuidanceTime).inMilliseconds >= 2500) {
@@ -488,7 +516,6 @@ class PathAnalyzerService {
       return false;
     }
 
-    // Medium / warning: speak if guidance changed, or after 4s cooldown
     if (analysis.alertPriority == 2) {
       if (analysis.guidance != _lastGuidance ||
           now.difference(_lastGuidanceTime).inSeconds >= 4) {
@@ -499,7 +526,6 @@ class PathAnalyzerService {
       return false;
     }
 
-    // Info / low urgency: speak only if objects changed or after 10s
     final currentObjects =
         analysis.obstacles.map((o) => o.object.label).toSet();
     if (currentObjects.difference(_lastAnnouncedObjects).isNotEmpty ||

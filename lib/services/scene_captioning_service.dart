@@ -53,10 +53,11 @@ class SceneCaptioningService {
 
   String? _workingModel;
 
-  Future<SceneCaptioningResult?> captureSceneCaptioning(Uint8List imageBytes) async {
+  Future<SceneCaptioningResult?> captureSceneCaptioning(List<Uint8List> imagesBytesList) async {
+    if (imagesBytesList.isEmpty) return null;
     if (_workingModel != null) {
       try {
-        return await _callModel(_workingModel!, imageBytes);
+        return await _callModel(_workingModel!, imagesBytesList);
       } catch (e) {
         final msg = e.toString().toLowerCase();
         if (msg.contains('quota') || msg.contains('429') ||
@@ -71,7 +72,7 @@ class SceneCaptioningService {
     for (final model in _models) {
       try {
         print('Trying: $model');
-        final result = await _callModel(model, imageBytes);
+        final result = await _callModel(model, imagesBytesList);
         if (result != null) {
           _workingModel = model;
           print('Using: $model');
@@ -92,39 +93,43 @@ class SceneCaptioningService {
   }
 
   Future<SceneCaptioningResult?> _callModel(
-      String model, Uint8List imageBytes) async {
-    final base64Image = base64Encode(imageBytes);
+      String model, List<Uint8List> imagesBytesList) async {
+    final List<Map<String, dynamic>> parts = [];
+
+    for (final bytes in imagesBytesList) {
+      parts.add({
+        'inline_data': {
+          'mime_type': 'image/jpeg',
+          'data': base64Encode(bytes),
+        }
+      });
+    }
 
     final isHindi = LanguagePreferenceService().isHindi;
     final prompt = isHindi
-        ? 'आप एक दृष्टिबाधित व्यक्ति की मदद कर रहे हैं यह समझने में कि उनके सामने क्या है। '
-          'इस छवि को देखें और 1-2 छोटे वाक्यों में दृश्य का वर्णन करें। '
+        ? 'आप एक दृष्टिबाधित व्यक्ति की मदद कर रहे हैं उनके आस-पास के वातावरण को समझने में। '
+          'इन 3 छवियों को देखें और पूरे दृश्य का 1-2 छोटे वाक्यों में विस्तृत वर्णन करें। '
+          'तीनों छवियों के विवरण को मिलाकर उनके सामने और आस-पास का पूरा माहौल बताएं। '
           'जो कुछ भी आप देख रहे हैं, सीधे उससे शुरुआत करें। '
           'वस्तुओं, लोगों और परिवेश के बारे में विशिष्ट विवरण दें। '
           'इसे 30 शब्दों से कम में रखें। '
           'उदाहरण: "सड़क पर कारों और फुटपाथ पर चलने वाले लोगों के साथ एक व्यस्त सड़क है। दोनों तरफ दुकानें हैं।" '
-          'यह कभी न कहें कि "मैं देख रहा हूँ" या "छवि दिखाती है"। केवल सीधा और सटीक वर्णन करें।'
-        : 'You are helping a blind person understand what is in front of them. '
-          'Look at this image and describe the scene in 1-2 short sentences. '
+          'यह कभी न कहें कि "मैं देख रहा हूँ" या "छवि दिखाती है" या "पहली छवि में"। केवल सीधा और सटीक वर्णन करें।'
+        : 'You are helping a blind person understand their surrounding environment. '
+          'Look at these 3 image frames of the surroundings and describe the overall scene in 1-2 short sentences. '
+          'Combine details across all 3 frames to provide a complete context of what is in front and around them. '
           'Start directly with what you see. '
           'Be specific about objects, people, and setting. '
           'Keep it under 30 words. '
-          'Example: "A busy street with cars and people walking on the pavement. '
-          'There are shops on both sides." '
-          'Do not say "I see" or "The image shows". Just describe directly.';
+          'Example: "A busy street with cars and people walking on the pavement. There are shops on both sides." '
+          'Do not say "I see", "The image shows", or "In frame 1". Just describe directly.';
+
+    parts.add({'text': prompt});
 
     final body = jsonEncode({
       'contents': [
         {
-          'parts': [
-            {
-              'inline_data': {
-                'mime_type': 'image/jpeg',
-                'data': base64Image,
-              }
-            },
-            {'text': prompt}
-          ]
+          'parts': parts,
         }
       ],
       'generationConfig': {
@@ -176,13 +181,13 @@ class SceneCaptioningService {
       return null;
     }
 
-    final parts = candidates[0]?['content']?['parts'];
-    if (parts == null || parts is! List || parts.isEmpty) {
+    final resParts = candidates[0]?['content']?['parts'];
+    if (resParts == null || resParts is! List || resParts.isEmpty) {
       print('No parts');
       return null;
     }
 
-    final caption = parts
+    final caption = resParts
         .where((p) => p != null && p['text'] != null)
         .map((p) => p['text'].toString())
         .join(' ')

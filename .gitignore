@@ -18,6 +18,7 @@ build/
 
 # VS Code
 .vscode/
+.env
 
 # IntelliJ / Android Studio
 .idea/

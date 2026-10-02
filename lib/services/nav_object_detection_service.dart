@@ -155,8 +155,11 @@ class NavObjectDetectionService {
   List<String> _labels = [];
   bool _isInitialized = false;
 
-  /// Depth estimation engine (bounding-box heuristic)
+  /// Depth estimation engine (MiDaS model + bounding-box heuristic fallback)
   final DepthEstimationService _depthService = DepthEstimationService();
+
+  /// Expose depth service for external depth map access (safe direction, etc.)
+  DepthEstimationService get depthService => _depthService;
 
   bool get isInitialized => _isInitialized;
 
@@ -181,6 +184,9 @@ class NavObjectDetectionService {
       debugPrint('[NavObjDet] Initialised — ${_labels.length} labels loaded');
       debugPrint('[NavObjDet] Input: ${_interpreter!.getInputTensors()}');
       debugPrint('[NavObjDet] Output: ${_interpreter!.getOutputTensors()}');
+
+      // Init MiDaS depth model (non-fatal — falls back to heuristic)
+      await _depthService.initMidas();
     } catch (e) {
       debugPrint('[NavObjDet] Init failed: $e');
       rethrow;
@@ -190,6 +196,7 @@ class NavObjectDetectionService {
   void dispose() {
     _interpreter?.close();
     _interpreter = null;
+    _depthService.dispose();
     _isInitialized = false;
   }
 

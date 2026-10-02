@@ -196,11 +196,12 @@ img.Image _processCameraImageIsolate(Map<String, dynamic> data) {
   for (int y = 0; y < h; y++) {
     for (int x = 0; x < w; x++) {
       final int yIndex = y * yBytesPerRow + x;
-      final int uvIndex = uvPixelStride * (x ~/ 2) + uBytesPerRow * (y ~/ 2);
+      final int uIndex = uvPixelStride * (x ~/ 2) + uBytesPerRow * (y ~/ 2);
+      final int vIndex = uvPixelStride * (x ~/ 2) + vBytesPerRow * (y ~/ 2);
 
       final int yVal = yBytes[yIndex];
-      final int uVal = uvIndex < uBytes.length ? uBytes[uvIndex] : 128;
-      final int vVal = uvIndex < vBytes.length ? vBytes[uvIndex] : 128;
+      final int uVal = uIndex < uBytes.length ? uBytes[uIndex] : 128;
+      final int vVal = vIndex < vBytes.length ? vBytes[vIndex] : 128;
 
       int r = (yVal + 1.370705 * (vVal - 128)).round().clamp(0, 255);
       int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128))

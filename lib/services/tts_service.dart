@@ -38,9 +38,12 @@ class TtsService {
   bool get isHindi => LanguagePreferenceService().isHindi;
 
   /// Speak a plain UI string using the user's preferred language.
-  Future<void> speak(String text) async {
+  Future<void> speak(String text, {bool awaitCompletion = false}) async {
     await _tts.stop();
     await _resetToDefaults();
+    if (awaitCompletion) {
+      await _tts.awaitSpeakCompletion(true);
+    }
     await _tts.speak(text);
   }
 

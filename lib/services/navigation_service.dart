@@ -17,7 +17,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' show sin, cos, sqrt, atan2, pi, max, min;
+import 'dart:math' show sin, cos, sqrt, atan2, pi;
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -50,35 +50,35 @@ class NavigationStep {
     this.maneuver,
   });
 
-  /// Friendly maneuver description for voice
+  /// Friendly maneuver description using clock-position directions.
   String get maneuverVoice {
     switch (maneuver) {
       case 'turn-left':
-        return 'turn left';
+        return "turn to 9 o'clock";
       case 'turn-right':
-        return 'turn right';
+        return "turn to 3 o'clock";
       case 'turn-slight-left':
-        return 'bear left';
+        return "turn to 10 o'clock";
       case 'turn-slight-right':
-        return 'bear right';
+        return "turn to 2 o'clock";
       case 'turn-sharp-left':
-        return 'sharp left';
+        return "turn to 8 o'clock";
       case 'turn-sharp-right':
-        return 'sharp right';
+        return "turn to 4 o'clock";
       case 'uturn-left':
       case 'uturn-right':
-        return 'make a U-turn';
+        return "turn to 6 o'clock, U-turn";
       case 'straight':
-        return 'continue straight';
+        return "continue straight, 12 o'clock";
       case 'roundabout-left':
       case 'roundabout-right':
         return 'enter the roundabout';
       case 'merge':
         return 'merge';
       case 'fork-left':
-        return 'take the left fork';
+        return "take the left fork, 10 o'clock";
       case 'fork-right':
-        return 'take the right fork';
+        return "take the right fork, 2 o'clock";
       default:
         return 'continue';
     }
@@ -770,19 +770,24 @@ class NavigationService {
         .trim();
   }
 
-  /// Format a distance in metres to a human-readable string.
+  /// Format a distance in metres to a human-readable string using steps.
+  /// 1 step ≈ 0.6 metres.
   String _formatDistance(double metres) {
-    if (metres < 50) return '${metres.round()} meters';
-    if (metres < 1000) return '${(metres / 10).round() * 10} meters';
-    return '${(metres / 1000).toStringAsFixed(1)} kilometers';
+    final steps = (metres / 0.6).round();
+    if (steps <= 1) return '1 step';
+    if (steps < 100) return '$steps steps';
+    if (steps < 1000) return '${(steps / 10).round() * 10} steps';
+    return '${(steps / 100).round() * 100} steps';
   }
 
   String _formatDistanceLocalized(double metres) {
     final isHindi = LanguagePreferenceService().isHindi;
+    final steps = (metres / 0.6).round();
     if (isHindi) {
-      if (metres < 50) return '${metres.round()} मीटर';
-      if (metres < 1000) return '${(metres / 10).round() * 10} मीटर';
-      return '${(metres / 1000).toStringAsFixed(1)} किलोमीटर';
+      if (steps <= 1) return '1 कदम';
+      if (steps < 100) return '$steps कदम';
+      if (steps < 1000) return '${(steps / 10).round() * 10} कदम';
+      return '${(steps / 100).round() * 100} कदम';
     }
     return _formatDistance(metres);
   }
@@ -806,19 +811,21 @@ class NavigationService {
     return '${hours}h ${remMins}m';
   }
 
-  /// Round distance to natural breakpoints for voice (e.g. "20 meters")
+  /// Round distance to natural breakpoints for voice using steps.
+  /// 1 step ≈ 0.6 metres.
   String _roundDistance(double metres) {
-    if (metres < 15) return '10 meters';
-    if (metres < 25) return '20 meters';
-    if (metres < 40) return '30 meters';
-    if (metres < 60) return '50 meters';
-    if (metres < 80) return '70 meters';
-    if (metres < 120) return '100 meters';
-    if (metres < 175) return '150 meters';
-    if (metres < 250) return '200 meters';
-    if (metres < 400) return '300 meters';
-    if (metres < 750) return '500 meters';
-    return '${(metres / 1000).toStringAsFixed(1)} kilometers';
+    final steps = (metres / 0.6).round();
+    if (steps < 5) return '3 steps';
+    if (steps < 10) return '8 steps';
+    if (steps < 20) return '15 steps';
+    if (steps < 35) return '25 steps';
+    if (steps < 60) return '50 steps';
+    if (steps < 100) return '80 steps';
+    if (steps < 180) return '150 steps';
+    if (steps < 350) return '250 steps';
+    if (steps < 600) return '500 steps';
+    if (steps < 1000) return '800 steps';
+    return '${(steps / 1000).toStringAsFixed(1)} thousand steps';
   }
 
   /// Haversine distance in metres between two lat/lng points

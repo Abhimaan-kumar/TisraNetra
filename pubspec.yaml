@@ -87,6 +87,7 @@ flutter:
     - assets/models/mobile_face_net.tflite
     - assets/models/ssd_mobilenet_v2.tflite
     - assets/models/coco_labels.txt
+    - assets/models/midas_v2_small.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:

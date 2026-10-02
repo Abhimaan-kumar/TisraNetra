@@ -15,7 +15,7 @@
 // Bilingual: English + Hindi.
 
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:math' show sin, cos;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -109,6 +109,9 @@ class _NavigateScreenState extends State<NavigateScreen>
   // ── Safety vs Route priority ──────────────────────────────────────────────
   DateTime _lastSafetySpeak = DateTime(2000);
 
+  // ── Safe direction for arrow overlay ─────────────────────────────────────
+  final ValueNotifier<double> _safeDirectionAngleN = ValueNotifier(0.0);
+
   // ── Init state ────────────────────────────────────────────────────────────
   bool _initialized = false;
   String _initError = '';
@@ -156,6 +159,7 @@ class _NavigateScreenState extends State<NavigateScreen>
     _navSnapshotN.dispose();
     _isReroutingN.dispose();
     _isApproachingTurnN.dispose();
+    _safeDirectionAngleN.dispose();
     super.dispose();
   }
 
@@ -306,6 +310,13 @@ class _NavigateScreenState extends State<NavigateScreen>
       final detections =
           await _detectionService.detect(image, _sensorOrientation);
 
+      // 1b. Run MiDaS depth map estimation (for safe direction + enhanced depth)
+      final depthService = _detectionService.depthService;
+      if (depthService.isMidasReady) {
+        await depthService.estimateDepthMap(image, _sensorOrientation);
+      }
+      final safeDir = depthService.lastSafeDirection;
+
       // 2. Structural blockage detection (walls, doors)
       String? structuralBlocker;
       if (detections.isEmpty || detections.every((d) => d.dangerLevel == DangerLevel.info)) {
@@ -313,8 +324,12 @@ class _NavigateScreenState extends State<NavigateScreen>
          structuralBlocker = await _sceneLabeler.detectStructuralBlockage(inputImage);
       }
 
-      // 3. Path analysis (with boundary lines + urgency)
-      final analysis = _pathAnalyzer.analyze(detections, structuralBlocker: structuralBlocker);
+      // 3. Path analysis (with boundary lines + urgency + clock directions)
+      final analysis = _pathAnalyzer.analyze(
+        detections,
+        structuralBlocker: structuralBlocker,
+        safeDirection: safeDir,
+      );
 
       // 4. Face recognition (if person detected)
       String? faceName;
@@ -328,6 +343,7 @@ class _NavigateScreenState extends State<NavigateScreen>
 
       _detectionsN.value = detections;
       _pathAnalysisN.value = analysis;
+      _safeDirectionAngleN.value = analysis.safeDirection.angleRadians;
       if (_mode == _NavMode.walkMode) {
         _walkStatusN.value = isHindi ? analysis.guidanceHi : analysis.guidance;
       }
@@ -1193,6 +1209,21 @@ class _NavigateScreenState extends State<NavigateScreen>
               ),
             ),
           ),
+
+        // ── Safe direction arrow overlay ──────────────────────────────────
+        Positioned.fill(
+          child: ValueListenableBuilder<double>(
+            valueListenable: _safeDirectionAngleN,
+            builder: (context, angle, _) {
+              return CustomPaint(
+                painter: _SafeDirectionArrowPainter(
+                  angleRadians: angle,
+                  urgency: _pathAnalysisN.value?.urgency ?? VoiceUrgency.low,
+                ),
+              );
+            },
+          ),
+        ),
       ],
     );
   }
@@ -1689,13 +1720,14 @@ class _NavigateScreenState extends State<NavigateScreen>
         final progress = totalSteps > 0 ? (currentIdx / totalSteps) : 0.0;
 
         final nextTurnDist = snapshot.distanceToNextTurn;
+        final nextTurnSteps = (nextTurnDist / 0.6).round();
         String nextTurnText;
-        if (nextTurnDist < 15) {
+        if (nextTurnSteps < 3) {
           nextTurnText = 'Now';
-        } else if (nextTurnDist < 100) {
-          nextTurnText = '${nextTurnDist.round()} m';
+        } else if (nextTurnSteps < 150) {
+          nextTurnText = '$nextTurnSteps steps';
         } else {
-          nextTurnText = '${(nextTurnDist / 1000).toStringAsFixed(1)} km';
+          nextTurnText = '${(nextTurnSteps / 100).round() * 100} steps';
         }
 
         return Container(
@@ -2230,3 +2262,148 @@ class _NavOverlayPainter extends CustomPainter {
       old.pathBoundary != pathBoundary ||
       old.urgency != urgency;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Safe Direction Arrow Painter
+//  — Fixed base at bottom-centre, tip rotates toward safest walking direction
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _SafeDirectionArrowPainter extends CustomPainter {
+  /// Angle in radians: 0 = 12 o’clock (up), π/2 = 3 o’clock (right), etc.
+  final double angleRadians;
+
+  /// Current urgency level — drives the arrow colour.
+  final VoiceUrgency urgency;
+
+  const _SafeDirectionArrowPainter({
+    required this.angleRadians,
+    required this.urgency,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // ── Layout constants ─────────────────────────────────────────────────────
+    final baseX = size.width / 2;
+    final baseY = size.height - 40; // fixed at bottom-centre
+    final arrowLength = size.height * 0.22; // shaft length
+    final arrowHeadSize = 14.0;
+    final baseRadius = 16.0;
+
+    // ── Compute tip position ─────────────────────────────────────────────────
+    // angleRadians: 0 = up, π/2 = right, π = down, 3π/2 = left
+    // Convert to canvas coords: dx = sin(angle), dy = -cos(angle)
+    final tipX = baseX + arrowLength * sin(angleRadians);
+    final tipY = baseY - arrowLength * cos(angleRadians);
+
+    // ── Choose colour based on urgency ───────────────────────────────────────
+    final Color arrowColor;
+    switch (urgency) {
+      case VoiceUrgency.critical:
+        arrowColor = _kRed;
+        break;
+      case VoiceUrgency.high:
+        arrowColor = _kOrange;
+        break;
+      case VoiceUrgency.medium:
+        arrowColor = _kYellow;
+        break;
+      case VoiceUrgency.low:
+        arrowColor = _kCyan;
+        break;
+    }
+
+    // ── 1. Draw outer glow ring at base ─────────────────────────────────────
+    canvas.drawCircle(
+      Offset(baseX, baseY),
+      baseRadius + 6,
+      Paint()
+        ..color = arrowColor.withOpacity(0.15)
+        ..style = PaintingStyle.fill
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+    );
+
+    // ── 2. Draw base circle (compass dot) ──────────────────────────────────
+    canvas.drawCircle(
+      Offset(baseX, baseY),
+      baseRadius,
+      Paint()
+        ..color = const Color(0xFF1A2530).withOpacity(0.85)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      Offset(baseX, baseY),
+      baseRadius,
+      Paint()
+        ..color = arrowColor.withOpacity(0.6)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0,
+    );
+
+    // ── 3. Draw arrow shaft with glow ───────────────────────────────────────
+    // Glow
+    canvas.drawLine(
+      Offset(baseX, baseY),
+      Offset(tipX, tipY),
+      Paint()
+        ..color = arrowColor.withOpacity(0.25)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 8.0
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+    // Main shaft
+    canvas.drawLine(
+      Offset(baseX, baseY),
+      Offset(tipX, tipY),
+      Paint()
+        ..color = arrowColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.5
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // ── 4. Draw arrowhead (triangle) ────────────────────────────────────────
+    final headAngle = 0.45; // half-angle of arrowhead
+    final headLen = arrowHeadSize;
+
+    final leftWingX = tipX - headLen * sin(angleRadians - headAngle);
+    final leftWingY = tipY + headLen * cos(angleRadians - headAngle);
+    final rightWingX = tipX - headLen * sin(angleRadians + headAngle);
+    final rightWingY = tipY + headLen * cos(angleRadians + headAngle);
+
+    final headPath = Path()
+      ..moveTo(tipX, tipY)
+      ..lineTo(leftWingX, leftWingY)
+      ..lineTo(rightWingX, rightWingY)
+      ..close();
+
+    // Glow
+    canvas.drawPath(
+      headPath,
+      Paint()
+        ..color = arrowColor.withOpacity(0.3)
+        ..style = PaintingStyle.fill
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+    // Solid
+    canvas.drawPath(
+      headPath,
+      Paint()
+        ..color = arrowColor
+        ..style = PaintingStyle.fill,
+    );
+
+    // ── 5. Draw inner dot at base ───────────────────────────────────────────
+    canvas.drawCircle(
+      Offset(baseX, baseY),
+      5,
+      Paint()
+        ..color = arrowColor
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SafeDirectionArrowPainter old) =>
+      old.angleRadians != angleRadians || old.urgency != urgency;
+}
