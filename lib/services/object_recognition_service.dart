@@ -153,7 +153,10 @@ class ObjectRecognitionService {
   static const double _confidenceThreshold = 0.55; // Heightened threshold for high precision
   static const double _nmsIoUThreshold = 0.40;       // Non-Maximum Suppression overlap cutoff
 
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY';
+  static const String _apiKey = String.fromEnvironment(
+    'GEMINI_VISION_API_KEY',
+    defaultValue: String.fromEnvironment('GEMINI_API_KEY'),
+  );
   static const List<String> _geminiModels = [
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',

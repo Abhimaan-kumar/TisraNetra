@@ -41,7 +41,10 @@ class SceneCaptioningResult {
 }
 
 class SceneCaptioningService {
-  static const String _apiKey = 'REDACTED_PRIVATE_API_KEY'; 
+  static const String _apiKey = String.fromEnvironment(
+    'GEMINI_VISION_API_KEY',
+    defaultValue: String.fromEnvironment('GEMINI_API_KEY'),
+  );
 
   static const List<String> _models = [
     'gemini-2.5-flash-lite',
